@@ -1,0 +1,14 @@
+node_modules/
+.vite/
+frontend/node_modules/
+frontend/.vite/
+__pycache__/
+*.pyc
+.env
+uploads/
+*.egg-info/
+dist/
+.vercel/
+.DS_Store
+*.timestamp-*.mjs
+*.DS_Store
