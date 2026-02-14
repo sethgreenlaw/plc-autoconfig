@@ -1,0 +1,80 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="100" fill="#fce7f3"/>
+
+  <!-- Neck -->
+  <rect x="75" y="130" width="50" height="25" fill="#c9915f"/>
+
+  <!-- Shirt collar and tie -->
+  <path d="M 75 135 L 70 155 L 85 150 Z" fill="#be185d"/>
+  <path d="M 125 135 L 130 155 L 115 150 Z" fill="#be185d"/>
+
+  <!-- Magenta/pink tie -->
+  <rect x="93" y="145" width="14" height="35" fill="#be185d" rx="2"/>
+  <path d="M 93 145 L 100 155 L 107 145 Z" fill="#831843"/>
+  <!-- Tie pattern -->
+  <line x1="95" y1="150" x2="105" y2="150" stroke="#831843" stroke-width="0.5" opacity="0.6"/>
+  <line x1="94" y1="162" x2="106" y2="162" stroke="#831843" stroke-width="0.5" opacity="0.6"/>
+
+  <!-- Shirt -->
+  <ellipse cx="100" cy="165" rx="40" ry="30" fill="#be185d"/>
+
+  <!-- Head (olive/tan skin - Hispanic features) -->
+  <circle cx="100" cy="85" r="35" fill="#d4a574"/>
+
+  <!-- Ears -->
+  <ellipse cx="67" cy="85" rx="8" ry="12" fill="#c9915f"/>
+  <ellipse cx="133" cy="85" rx="8" ry="12" fill="#c9915f"/>
+
+  <!-- Hair (dark, thick, with volume) -->
+  <circle cx="100" cy="52" r="33" fill="#2d1d1a"/>
+  <path d="M 65 68 Q 62 75 65 85" fill="#2d1d1a"/>
+  <path d="M 135 68 Q 138 75 135 85" fill="#2d1d1a"/>
+
+  <!-- Hair texture lines -->
+  <path d="M 72 58 Q 75 50 82 55" fill="none" stroke="#1a1010" stroke-width="0.5" opacity="0.5"/>
+  <path d="M 128 58 Q 125 50 118 55" fill="none" stroke="#1a1010" stroke-width="0.5" opacity="0.5"/>
+
+  <!-- Face -->
+  <!-- Eyes (experienced, serious) -->
+  <ellipse cx="85" cy="82" rx="5" ry="6" fill="#ffffff"/>
+  <ellipse cx="115" cy="82" rx="5" ry="6" fill="#ffffff"/>
+  <circle cx="85" cy="84" r="3.5" fill="#3d251f"/>
+  <circle cx="115" cy="84" r="3.5" fill="#3d251f"/>
+
+  <!-- Eye shine -->
+  <circle cx="86" cy="82" r="1.4" fill="#ffffff" opacity="0.85"/>
+  <circle cx="116" cy="82" r="1.4" fill="#ffffff" opacity="0.85"/>
+
+  <!-- Eyebrows (thick, experienced) -->
+  <path d="M 77 75 Q 85 71 93 74" fill="none" stroke="#2d1d1a" stroke-width="2" stroke-linecap="round"/>
+  <path d="M 107 74 Q 115 71 123 75" fill="none" stroke="#2d1d1a" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Nose (defined, prominent) -->
+  <path d="M 100 84 L 100 100" stroke="#a58470" stroke-width="2" stroke-linecap="round"/>
+  <ellipse cx="97" cy="101" rx="1.8" ry="2.2" fill="#a58470"/>
+  <ellipse cx="103" cy="101" rx="1.8" ry="2.2" fill="#a58470"/>
+
+  <!-- MUSTACHE (distinctive feature) -->
+  <!-- Left side of mustache -->
+  <path d="M 100 96 Q 92 94 85 97" fill="none" stroke="#2d1d1a" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Right side of mustache -->
+  <path d="M 100 96 Q 108 94 115 97" fill="none" stroke="#2d1d1a" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Mustache middle section -->
+  <ellipse cx="100" cy="95" rx="8" ry="2.5" fill="#2d1d1a" opacity="0.7"/>
+
+  <!-- Mouth (friendly but experienced) -->
+  <path d="M 85 110 Q 100 116 115 110" fill="none" stroke="#8b6f47" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M 85 110 Q 100 113 115 110" fill="#d4a574" opacity="0.4"/>
+
+  <!-- Cheeks -->
+  <ellipse cx="70" cy="95" rx="5" ry="4" fill="#b89968" opacity="0.25"/>
+  <ellipse cx="130" cy="95" rx="5" ry="4" fill="#b89968" opacity="0.25"/>
+
+  <!-- Chin/jawline (mature) -->
+  <path d="M 72 108 Q 100 122 128 108" fill="none" stroke="#8b6f47" stroke-width="1.5" opacity="0.4"/>
+
+  <!-- Age lines (experienced look) -->
+  <path d="M 75 78 Q 78 85 75 92" fill="none" stroke="#a58470" stroke-width="0.5" opacity="0.3"/>
+  <path d="M 125 78 Q 122 85 125 92" fill="none" stroke="#a58470" stroke-width="0.5" opacity="0.3"/>
+</svg>

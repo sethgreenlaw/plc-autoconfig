@@ -723,9 +723,9 @@ const RecordTypesTab = ({ config, projectId, onRefresh, onConfigRefresh, showSna
   const departments = config?.departments || [];
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Box sx={{ mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 0.5 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
           Record Types
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>

@@ -88,10 +88,10 @@ const OverviewTab = ({ project, config }) => {
   ];
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       {/* Title */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
           {project?.name || 'Project Overview'}
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>

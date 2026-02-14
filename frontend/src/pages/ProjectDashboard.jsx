@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography } from '@mui/material';
+import { DRAWER_WIDTH } from '../theme';
 import { api } from '../api/client';
 import { useSnackbar } from '../context/SnackbarContext';
 import Sidebar from '../components/layout/Sidebar';
@@ -12,30 +13,90 @@ import RolesTab from '../components/tabs/RolesTab';
 import ReviewTab from '../components/tabs/ReviewTab';
 import CommunityResearchTab from '../components/tabs/CommunityResearchTab';
 import DeployTab from '../components/tabs/DeployTab';
-
-const DRAWER_WIDTH = 280;
+import LmsTab from '../components/tabs/LmsTab';
+import ConsultantTab from '../components/tabs/ConsultantTab';
+import DataSourcesTab from '../components/tabs/DataSourcesTab';
 
 export default function ProjectDashboard() {
   const { id: projectId, tab } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { showSnackbar } = useSnackbar();
   const [project, setProject] = useState(null);
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
+  const retryCount = useRef(0);
+  const initialLoadDone = useRef(false);
 
   const currentTab = tab || 'overview';
 
+  const recoverProject = useCallback(async (projectData) => {
+    // Re-create project on backend with the same ID (cold-start recovery)
+    if (!projectData?.name) return false;
+    try {
+      console.log(`[Dashboard] Re-creating project ${projectId} on backend...`);
+      await api.createProject({
+        id: projectId,
+        name: projectData.name,
+        customer_name: projectData.customer_name,
+        product_type: projectData.product_type || 'PLC',
+        community_url: projectData.community_url || '',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [projectId]);
+
   const loadProject = useCallback(async () => {
+    // On very first mount, use navigation state if available (avoids cold-start delay)
+    if (!initialLoadDone.current && location.state?.project) {
+      initialLoadDone.current = true;
+      const p = location.state.project;
+      setProject(p);
+      if (p.configuration) setConfig(p.configuration);
+      setLoading(false);
+      // Ensure the project exists on the backend (handles Vercel cold starts)
+      api.getProject(projectId).then((fresh) => {
+        setProject(fresh);
+        if (fresh.configuration) setConfig(fresh.configuration);
+      }).catch(async () => {
+        // Backend lost the project — re-create it
+        await recoverProject(p);
+      });
+      return;
+    }
+    initialLoadDone.current = true;
+
     try {
       const p = await api.getProject(projectId);
       setProject(p);
       if (p.configuration) setConfig(p.configuration);
+      retryCount.current = 0;
     } catch (err) {
-      showSnackbar('Failed to load project', 'error');
+      // Retry up to 3 times with increasing delay (handles serverless cold starts)
+      if (retryCount.current < 3) {
+        retryCount.current += 1;
+        const delay = retryCount.current * 1500;
+        console.log(`Project load failed, retrying in ${delay}ms (attempt ${retryCount.current}/3)...`);
+        setTimeout(() => loadProject(), delay);
+        return;
+      }
+      // Last resort: try to recover from navigation state if available
+      if (location.state?.project) {
+        const recovered = await recoverProject(location.state.project);
+        if (recovered) {
+          setProject(location.state.project);
+          showSnackbar('Project restored. You may need to re-upload files.', 'info');
+          setLoading(false);
+          return;
+        }
+      }
+      showSnackbar('Failed to load project. Please refresh the page.', 'error');
     } finally {
       setLoading(false);
     }
-  }, [projectId, showSnackbar]);
+  }, [projectId, showSnackbar, location.state, recoverProject]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -105,8 +166,14 @@ export default function ProjectDashboard() {
         return <DepartmentsTab {...tabProps} />;
       case 'roles':
         return <RolesTab {...tabProps} />;
+      case 'data-sources':
+        return <DataSourcesTab {...tabProps} />;
       case 'community':
         return <CommunityResearchTab {...tabProps} />;
+      case 'lms':
+        return <LmsTab {...tabProps} />;
+      case 'consultant':
+        return <ConsultantTab {...tabProps} />;
       case 'review':
         return <ReviewTab {...tabProps} />;
       case 'deploy':
@@ -125,10 +192,18 @@ export default function ProjectDashboard() {
           flex: 1,
           ml: `${DRAWER_WIDTH}px`,
           overflow: 'auto',
-          p: 4,
+          minHeight: '100vh',
         }}
       >
-        {renderTab()}
+        <Box
+          sx={{
+            maxWidth: 1200,
+            px: { xs: 2, sm: 3 },
+            py: { xs: 2, sm: 3 },
+          }}
+        >
+          {renderTab()}
+        </Box>
       </Box>
     </Box>
   );

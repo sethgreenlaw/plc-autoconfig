@@ -139,9 +139,9 @@ const DepartmentsTab = ({ config, projectId, onRefresh, onConfigRefresh, showSna
   };
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+    <Box>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
           Departments
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>

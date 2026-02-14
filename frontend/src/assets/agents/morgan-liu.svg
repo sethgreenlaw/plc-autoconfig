@@ -1,0 +1,66 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="100" fill="#d1fae5"/>
+
+  <!-- Neck -->
+  <rect x="75" y="130" width="50" height="25" fill="#f4c2a0"/>
+
+  <!-- Green blouse -->
+  <ellipse cx="100" cy="165" rx="40" ry="30" fill="#059669"/>
+  <path d="M 75 140 L 75 170 L 125 170 L 125 140 Z" fill="#059669"/>
+
+  <!-- Blouse details (neckline) -->
+  <path d="M 85 135 L 100 140 L 115 135" fill="#047857"/>
+
+  <!-- Ear accessories (gold earrings) -->
+  <circle cx="67" cy="90" r="4" fill="#f59e0b"/>
+  <circle cx="133" cy="90" r="4" fill="#f59e0b"/>
+  <circle cx="67" cy="90" r="2.5" fill="#fbbf24"/>
+  <circle cx="133" cy="90" r="2.5" fill="#fbbf24"/>
+
+  <!-- Head -->
+  <circle cx="100" cy="85" r="35" fill="#f4c2a0"/>
+
+  <!-- Ears -->
+  <ellipse cx="67" cy="85" rx="8" ry="12" fill="#e6b09a"/>
+  <ellipse cx="133" cy="85" rx="8" ry="12" fill="#e6b09a"/>
+
+  <!-- Hair (long, dark, flowing to shoulders) -->
+  <path d="M 65 60 Q 65 45 100 45 Q 135 45 135 60 L 135 75 Q 135 85 130 95 L 70 95 Q 65 85 65 75 Z" fill="#2c1810"/>
+  <path d="M 70 55 Q 70 48 100 47 Q 130 48 130 55" fill="#3d241f"/>
+
+  <!-- Hair flow lines (texture) -->
+  <path d="M 72 70 Q 75 85 73 100" fill="none" stroke="#1a0f0a" stroke-width="0.5" opacity="0.4"/>
+  <path d="M 128 70 Q 125 85 127 100" fill="none" stroke="#1a0f0a" stroke-width="0.5" opacity="0.4"/>
+
+  <!-- Face -->
+  <!-- Eyes -->
+  <ellipse cx="85" cy="80" rx="5" ry="6" fill="#ffffff"/>
+  <ellipse cx="115" cy="80" rx="5" ry="6" fill="#ffffff"/>
+  <circle cx="85" cy="82" r="3" fill="#2c1810"/>
+  <circle cx="115" cy="82" r="3" fill="#2c1810"/>
+
+  <!-- Eye shine -->
+  <circle cx="86" cy="80" r="1.5" fill="#ffffff" opacity="0.8"/>
+  <circle cx="116" cy="80" r="1.5" fill="#ffffff" opacity="0.8"/>
+
+  <!-- Eyebrows (confident) -->
+  <path d="M 78 75 Q 85 72 92 74" fill="none" stroke="#2c1810" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M 108 74 Q 115 72 122 75" fill="none" stroke="#2c1810" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Nose -->
+  <path d="M 100 82 L 100 96" stroke="#d9a980" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="97" cy="97" r="1.5" fill="#d9a980"/>
+  <circle cx="103" cy="97" r="1.5" fill="#d9a980"/>
+
+  <!-- Mouth (confident smile) -->
+  <path d="M 87 107 Q 100 115 113 107" fill="none" stroke="#a0724f" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M 87 107 Q 100 112 113 107" fill="#f5dcc8" opacity="0.6"/>
+
+  <!-- Cheeks (subtle) -->
+  <ellipse cx="70" cy="92" rx="6" ry="5" fill="#e5a896" opacity="0.35"/>
+  <ellipse cx="130" cy="92" rx="6" ry="5" fill="#e5a896" opacity="0.35"/>
+
+  <!-- Chin/jawline definition -->
+  <path d="M 75 110 Q 100 125 125 110" fill="none" stroke="#e6b09a" stroke-width="1" opacity="0.5"/>
+</svg>

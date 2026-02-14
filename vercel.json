@@ -1,9 +1,13 @@
 {
-  "buildCommand": "cd frontend && npm install --legacy-peer-deps && npx vite build",
-  "outputDirectory": "frontend/dist",
+  "framework": null,
+  "buildCommand": "",
+  "outputDirectory": ".",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300
+    }
+  },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/health", "destination": "/api/index.py" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/api/index.py" }
   ]
 }

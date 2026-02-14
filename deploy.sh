@@ -28,7 +28,7 @@ if [ ! -d ".git" ]; then
     git commit -m "Initial commit: PLC AutoConfig"
 fi
 
-# Build frontend locally (Vercel will also build remotely, this is a safety net)
+# Build frontend
 echo ""
 echo "🔨 Building frontend..."
 cd frontend
@@ -36,6 +36,13 @@ npm install --legacy-peer-deps 2>/dev/null
 npx vite build
 cd ..
 echo "✅ Frontend built successfully"
+
+# Copy built frontend into api/static/ so the Python function can serve it
+echo ""
+echo "📁 Bundling frontend with API..."
+rm -rf api/static
+cp -r frontend/dist api/static
+echo "✅ Frontend bundled into api/static/"
 
 # Deploy to Vercel
 echo ""

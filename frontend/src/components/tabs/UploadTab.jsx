@@ -27,12 +27,12 @@ import {
 import { api } from '../../api/client';
 
 const ANALYSIS_STAGES = [
-  'Parsing CSV files...',
-  'Analyzing data structure...',
-  'Researching community...',
-  'AI analyzing record types...',
-  'Extracting workflows and fees...',
-  'Building configuration...',
+  'Parsing uploaded CSV files...',
+  'Scraping community website...',
+  'Extracting permits, fees & processes from website...',
+  'Matching peer city templates...',
+  'AI generating record types & workflows...',
+  'Building departments & user roles...',
   'Finalizing configuration...',
   'Complete',
 ];
@@ -43,6 +43,7 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState('');
+  const [analysisResult, setAnalysisResult] = useState(null); // { type: 'success'|'error', message }
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef();
   const pollRef = useRef();
@@ -66,6 +67,33 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
 
   const removeFile = (index) => setFiles((prev) => prev.filter((_, i) => i !== index));
 
+  const ensureProjectExists = async () => {
+    // If the backend lost the project (Vercel cold start / no KV), re-create it
+    try {
+      await api.getProject(projectId);
+      return true; // Project exists
+    } catch {
+      // Project not found — re-create it from frontend state
+      if (project?.name && project?.customer_name) {
+        console.log('[Upload] Project not found on backend, re-creating...');
+        try {
+          await api.createProject({
+            id: projectId,
+            name: project.name,
+            customer_name: project.customer_name,
+            product_type: project.product_type || 'PLC',
+            community_url: project.community_url || '',
+          });
+          return true;
+        } catch (createErr) {
+          console.error('[Upload] Failed to re-create project:', createErr);
+          return false;
+        }
+      }
+      return false;
+    }
+  };
+
   const handleUpload = async () => {
     if (files.length === 0) return;
     setUploading(true);
@@ -75,7 +103,26 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
       setFiles([]);
       await onRefresh();
     } catch (err) {
-      showSnackbar(err.message, 'error');
+      // If project not found, re-create it and retry the upload
+      if (err.message?.includes('not found') || err.message?.includes('404')) {
+        console.log('[Upload] Project not found, ensuring it exists...');
+        const exists = await ensureProjectExists();
+        if (exists) {
+          try {
+            await api.uploadFiles(projectId, files);
+            showSnackbar(`${files.length} file(s) uploaded successfully`, 'success');
+            setFiles([]);
+            await onRefresh();
+            return;
+          } catch (retryErr) {
+            showSnackbar(retryErr.message, 'error');
+          }
+        } else {
+          showSnackbar('Could not restore project. Please go back and re-create it.', 'error');
+        }
+      } else {
+        showSnackbar(err.message, 'error');
+      }
     } finally {
       setUploading(false);
     }
@@ -83,37 +130,64 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
 
   const handleAnalyze = async () => {
     setAnalyzing(true);
+    setAnalysisResult(null);
     setProgress(0);
     setStage('Starting...');
 
-    // Simulate progress animation while waiting for sync response
+    // Animated progress that matches real AI timing (~40-60 seconds)
     const stages = ANALYSIS_STAGES;
     let step = 0;
     const progressTimer = setInterval(() => {
       step++;
-      const pct = Math.min(90, Math.round((step / stages.length) * 90));
-      setProgress(pct);
-      setStage(stages[Math.min(step - 1, stages.length - 1)]);
-      if (step >= stages.length) clearInterval(progressTimer);
-    }, 800);
+      if (step <= stages.length) {
+        const pct = Math.min(95, Math.round((step / stages.length) * 95));
+        setProgress(pct);
+        setStage(stages[Math.min(step - 1, stages.length - 1)]);
+      }
+      if (step > stages.length) clearInterval(progressTimer);
+    }, 8000);
+
+    // Ensure project exists on backend before starting analysis
+    await ensureProjectExists();
 
     try {
       const result = await api.startAnalysis(projectId);
       clearInterval(progressTimer);
       setProgress(100);
       setStage('Complete');
+      setAnalysisResult({ type: 'success', message: 'Configuration generated successfully! Check the other tabs to review.' });
+      setAnalyzing(false);
 
-      if (result.status === 'configured') {
-        showSnackbar('Configuration generated successfully!', 'success');
-      } else if (result.status === 'error') {
-        showSnackbar('Analysis failed', 'error');
-      }
-      await onRefresh();
+      // Cache intelligence & research data locally so other tabs can access it
+      // even if Vercel routes to a different serverless instance
+      try {
+        if (result?.intelligence) {
+          sessionStorage.setItem(`intel_${projectId}`, JSON.stringify({ status: 'available', report: result.intelligence }));
+        }
+      } catch {}
+
+      try { await onRefresh(); } catch {}
     } catch (err) {
       clearInterval(progressTimer);
-      showSnackbar(err.message, 'error');
-    } finally {
-      setTimeout(() => setAnalyzing(false), 500);
+
+      // The request may have timed out but the backend might have finished.
+      try {
+        const statusData = await api.getAnalysisStatus(projectId);
+        if (statusData.status === 'configured') {
+          setProgress(100);
+          setStage('Complete');
+          setAnalysisResult({ type: 'success', message: 'Configuration generated successfully! Check the other tabs to review.' });
+          setAnalyzing(false);
+          try { await onRefresh(); } catch {}
+          return;
+        }
+      } catch {
+        // ignore status check failure
+      }
+
+      setProgress(0);
+      setAnalysisResult({ type: 'error', message: err.message || 'Analysis failed. Please try again.' });
+      setAnalyzing(false);
     }
   };
 
@@ -134,14 +208,14 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
   };
 
   const hasUploadedFiles = project?.uploaded_files?.length > 0;
-  const canAnalyze = hasUploadedFiles && !analyzing && project?.status !== 'configured';
+  const canAnalyze = hasUploadedFiles && !analyzing;
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
         <Box>
-          <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+          <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
             Upload Data
           </Typography>
           <Typography variant="body2" sx={{ color: 'text.secondary' }}>
@@ -151,9 +225,8 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
         <Button
           startIcon={<FileDownload />}
           variant="outlined"
-          color="primary"
+          size="small"
           onClick={handleDownloadSample}
-          sx={{ textTransform: 'none' }}
         >
           Download Sample CSV
         </Button>
@@ -247,8 +320,7 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
               color="primary"
               onClick={handleUpload}
               disabled={uploading}
-              fullWidth
-              sx={{ textTransform: 'none' }}
+              sx={{ maxWidth: 200 }}
             >
               {uploading ? 'Uploading...' : 'Upload Files'}
             </Button>
@@ -380,6 +452,23 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
             </Stack>
           </CardContent>
         </Card>
+      )}
+
+      {/* Analysis Result */}
+      {analysisResult && (
+        <Alert
+          severity={analysisResult.type === 'success' ? 'success' : 'error'}
+          icon={analysisResult.type === 'success' ? <CheckCircle /> : undefined}
+          sx={{ mb: 3 }}
+          onClose={() => setAnalysisResult(null)}
+        >
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {analysisResult.type === 'success' ? 'Analysis Complete!' : 'Analysis Failed'}
+          </Typography>
+          <Typography variant="body2">
+            {analysisResult.message}
+          </Typography>
+        </Alert>
       )}
 
       {/* Configured Success Alert */}

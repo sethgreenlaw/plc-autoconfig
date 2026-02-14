@@ -243,10 +243,10 @@ const ReviewTab = ({ config, project, showSnackbar }) => {
   const totalFees = (selectedRT.fees || []).reduce((sum, fee) => sum + (fee.amount || 0), 0);
 
   return (
-    <Box sx={{ p: 3, background: 'background.default', minHeight: '100%' }}>
+    <Box sx={{ minHeight: '100%' }}>
       {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 0.5 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
           Configuration Preview
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
@@ -316,8 +316,8 @@ const ReviewTab = ({ config, project, showSnackbar }) => {
                   ))
                 )}
               </Grid>
-              <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid #e2e8f0' }}>
-                <Button variant="contained" disabled fullWidth>
+              <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid #e5e7eb' }}>
+                <Button variant="contained" disabled sx={{ maxWidth: 240 }}>
                   Submit Application
                 </Button>
               </Box>

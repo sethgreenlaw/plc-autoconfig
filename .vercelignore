@@ -9,5 +9,4 @@ uploads/
 *.timestamp-*.mjs
 .vercel
 backend/
-frontend/node_modules/
-frontend/.vite/
+frontend/

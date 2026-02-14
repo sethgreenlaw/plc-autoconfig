@@ -60,10 +60,10 @@ const DeployTab = ({ config, projectId, showSnackbar }) => {
   ];
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       {/* Header */}
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
           Deploy to PLC
         </Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
@@ -122,12 +122,11 @@ const DeployTab = ({ config, projectId, showSnackbar }) => {
             startIcon={<Rocket />}
             onClick={handleDeploy}
             disabled={deploying || !config}
-            fullWidth
             sx={{
+              maxWidth: 280,
               background: deploying || !config
                 ? 'rgba(0, 0, 0, 0.3)'
                 : 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
-              textTransform: 'none',
               fontWeight: 600,
             }}
           >

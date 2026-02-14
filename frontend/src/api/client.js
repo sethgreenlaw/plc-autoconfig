@@ -62,4 +62,52 @@ export const api = {
   // Community Research
   startResearch: (projectId) => request(`/projects/${projectId}/research`, { method: 'POST' }),
   getResearch: (projectId) => request(`/projects/${projectId}/research`),
+  getScrapeStatus: (projectId) => request(`/projects/${projectId}/scrape-status`),
+
+  // City Preview
+  getCityPreview: (url) => request('/city-preview', { method: 'POST', body: { url } }),
+
+  // Consultant
+  askConsultant: (projectId, question, history = []) =>
+    request(`/projects/${projectId}/consultant/ask`, { method: 'POST', body: { question, history } }),
+
+  // LMS
+  generateLms: (projectId, type) => request(`/projects/${projectId}/lms/generate/${type}`, { method: 'POST' }),
+
+  // Data Sources
+  getDataSources: (projectId) => request(`/projects/${projectId}/sources`),
+  addMunicipalCode: (projectId, url) =>
+    request(`/projects/${projectId}/sources/municipal-code`, { method: 'POST', body: { url } }),
+  addExistingForm: (projectId, data) =>
+    request(`/projects/${projectId}/sources/existing-form`, { method: 'POST', body: data }),
+  addFeeSchedule: (projectId, data) =>
+    request(`/projects/${projectId}/sources/fee-schedule`, { method: 'POST', body: data }),
+  deleteSource: (projectId, sourceId) =>
+    request(`/projects/${projectId}/sources/${sourceId}`, { method: 'DELETE' }),
+  reconcileSources: (projectId) =>
+    request(`/projects/${projectId}/sources/reconcile`, { method: 'POST' }),
+  acceptReconciliation: (projectId, itemId) =>
+    request(`/projects/${projectId}/reconciliation/${itemId}/accept`, { method: 'POST' }),
+  rejectReconciliation: (projectId, itemId) =>
+    request(`/projects/${projectId}/reconciliation/${itemId}/reject`, { method: 'POST' }),
+
+  // Peer City Templates
+  getPeerTemplates: (search = '') => request(`/templates/peer-cities${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+  getPeerTemplate: (id) => request(`/templates/peer-cities/${id}`),
+  applyTemplate: (projectId, templateId, mode = 'merge') =>
+    request(`/projects/${projectId}/sources/apply-template`, { method: 'POST', body: { template_id: templateId, mode } }),
+
+  // Validation
+  validateConfig: (projectId) =>
+    request(`/projects/${projectId}/validate`, { method: 'POST' }),
+  autoFixFinding: (projectId, findingId) =>
+    request(`/projects/${projectId}/validate/auto-fix/${findingId}`, { method: 'POST' }),
+
+  // Intelligence Hub
+  getIntelligence: (projectId) =>
+    request(`/projects/${projectId}/intelligence`),
+  reAnalyze: (projectId, additionalContext) =>
+    request(`/projects/${projectId}/re-analyze`, { method: 'POST', body: { additional_context: additionalContext } }),
+  deepScrape: (projectId, agentId) =>
+    request(`/projects/${projectId}/deep-scrape`, { method: 'POST', body: { agent_id: agentId } }),
 }

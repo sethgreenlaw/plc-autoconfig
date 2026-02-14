@@ -22,10 +22,12 @@ import {
   Preview,
   Public,
   RocketLaunch,
+  School,
+  SupportAgent,
+  AutoAwesome,
 } from '@mui/icons-material';
 import { Link, useLocation, useParams } from 'react-router-dom';
-
-const DRAWER_WIDTH = 280;
+import { DRAWER_WIDTH } from '../../theme';
 
 const navItems = [
   { label: 'All Projects', icon: Home, id: 'all-projects', href: '/' },
@@ -38,7 +40,10 @@ const projectNavItems = [
   { label: 'Record Types', icon: Description, tab: 'record-types' },
   { label: 'Departments', icon: Business, tab: 'departments' },
   { label: 'User Roles', icon: People, tab: 'roles' },
+  { label: 'Intelligence', icon: AutoAwesome, tab: 'data-sources' },
   { label: 'Community Research', icon: Public, tab: 'community' },
+  { label: 'Learning Materials', icon: School, tab: 'lms' },
+  { label: 'AI Consultant', icon: SupportAgent, tab: 'consultant' },
   { label: 'Review', icon: Preview, tab: 'review' },
   { label: 'Deploy', icon: RocketLaunch, tab: 'deploy' },
 ];
@@ -63,8 +68,8 @@ export default function Sidebar({ project }) {
         '& .MuiDrawer-paper': {
           width: DRAWER_WIDTH,
           boxSizing: 'border-box',
-          bgcolor: 'background.paper',
-          borderRight: '1px solid #e2e8f0',
+          bgcolor: '#fafbfc',
+          borderRight: '1px solid #e5e7eb',
         },
       }}
     >
@@ -73,69 +78,75 @@ export default function Sidebar({ project }) {
           display: 'flex',
           flexDirection: 'column',
           height: '100%',
-          p: 2,
+          px: 1.5,
+          py: 2,
         }}
       >
         {/* Top Section: Logo and Branding */}
-        <Box sx={{ mb: 3 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <Box sx={{ mb: 2, px: 1 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
             <Description
               sx={{
-                fontSize: 28,
+                fontSize: 22,
                 color: 'primary.main',
               }}
             />
             <Typography
-              variant="h6"
+              variant="body2"
               sx={{
                 fontWeight: 700,
                 color: 'text.primary',
-                letterSpacing: 0.5,
+                letterSpacing: 0.3,
+                fontSize: '0.813rem',
               }}
             >
-              PLC AutoConfig
+              OpenGov Auto-Implement
             </Typography>
           </Stack>
           <Typography
             variant="caption"
             sx={{
-              color: 'text.secondary',
+              color: 'text.disabled',
               display: 'block',
+              fontSize: '0.688rem',
+              pl: 3.5,
             }}
           >
-            AI Configuration Engine
+            AI Implementation Engine
           </Typography>
         </Box>
 
-        <Divider sx={{ my: 2 }} />
+        <Divider sx={{ my: 1.5 }} />
 
         {/* Navigation Links */}
-        <List sx={{ flex: 1 }}>
+        <List disablePadding>
           {navItems.map((item) => (
-            <ListItem key={item.id} disablePadding sx={{ mb: 0.5 }}>
+            <ListItem key={item.id} disablePadding sx={{ mb: 0.25 }}>
               <ListItemButton
                 component={Link}
                 to={item.href}
                 sx={{
-                  borderRadius: 1,
+                  borderRadius: 1.5,
+                  py: 0.75,
                   '&:hover': {
-                    bgcolor: 'rgba(59, 130, 246, 0.08)',
+                    bgcolor: 'rgba(59, 130, 246, 0.06)',
                   },
                 }}
               >
                 <ListItemIcon
                   sx={{
-                    minWidth: 40,
+                    minWidth: 32,
                     color: 'text.secondary',
                   }}
                 >
-                  <item.icon />
+                  <item.icon sx={{ fontSize: 20 }} />
                 </ListItemIcon>
                 <ListItemText
                   primary={item.label}
                   primaryTypographyProps={{
                     variant: 'body2',
                     fontWeight: 500,
+                    fontSize: '0.813rem',
                   }}
                 />
               </ListItemButton>
@@ -146,71 +157,67 @@ export default function Sidebar({ project }) {
         {/* Project Section */}
         {project && (
           <>
-            <Divider sx={{ my: 2 }} />
+            <Divider sx={{ my: 1.5 }} />
 
             <Typography
-              variant="caption"
+              variant="overline"
               sx={{
-                textTransform: 'uppercase',
-                color: 'text.secondary',
-                fontWeight: 700,
-                mb: 1.5,
-                letterSpacing: 1,
+                color: 'text.disabled',
+                fontWeight: 600,
+                mb: 1,
+                px: 1,
+                fontSize: '0.625rem',
+                display: 'block',
               }}
             >
               {project.name || 'Project'}
             </Typography>
 
             <List disablePadding sx={{ flex: 1 }}>
-              {projectNavItems.map((item) => (
-                <ListItem key={item.tab} disablePadding sx={{ mb: 0.5 }}>
-                  <ListItemButton
-                    component={Link}
-                    to={`/project/${projectId}/${item.tab}`}
-                    selected={activeTab === item.tab}
-                    sx={{
-                      borderRadius: 1,
-                      borderLeft:
-                        activeTab === item.tab
-                          ? '3px solid'
-                          : '3px solid transparent',
-                      borderLeftColor:
-                        activeTab === item.tab ? 'primary.main' : 'transparent',
-                      bgcolor:
-                        activeTab === item.tab
-                          ? 'rgba(59, 130, 246, 0.08)'
-                          : 'transparent',
-                      pl: activeTab === item.tab ? '14px' : '16px',
-                      '&:hover': {
-                        bgcolor: 'rgba(59, 130, 246, 0.04)',
-                      },
-                      '&.Mui-selected': {
-                        bgcolor: 'rgba(59, 130, 246, 0.08)',
-                      },
-                      '&.Mui-selected:hover': {
-                        bgcolor: 'rgba(59, 130, 246, 0.12)',
-                      },
-                    }}
-                  >
-                    <ListItemIcon
+              {projectNavItems.map((item) => {
+                const isActive = activeTab === item.tab;
+                return (
+                  <ListItem key={item.tab} disablePadding sx={{ mb: 0.25 }}>
+                    <ListItemButton
+                      component={Link}
+                      to={`/project/${projectId}/${item.tab}`}
+                      selected={isActive}
                       sx={{
-                        minWidth: 40,
-                        color:
-                          activeTab === item.tab ? 'primary.main' : 'text.secondary',
+                        borderRadius: 1.5,
+                        py: 0.625,
+                        bgcolor: isActive ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
+                        '&:hover': {
+                          bgcolor: isActive ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.04)',
+                        },
+                        '&.Mui-selected': {
+                          bgcolor: 'rgba(59, 130, 246, 0.08)',
+                        },
+                        '&.Mui-selected:hover': {
+                          bgcolor: 'rgba(59, 130, 246, 0.12)',
+                        },
                       }}
                     >
-                      <item.icon />
-                    </ListItemIcon>
-                    <ListItemText
-                      primary={item.label}
-                      primaryTypographyProps={{
-                        variant: 'body2',
-                        fontWeight: activeTab === item.tab ? 600 : 500,
-                      }}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              ))}
+                      <ListItemIcon
+                        sx={{
+                          minWidth: 32,
+                          color: isActive ? 'primary.main' : 'text.secondary',
+                        }}
+                      >
+                        <item.icon sx={{ fontSize: 20 }} />
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item.label}
+                        primaryTypographyProps={{
+                          variant: 'body2',
+                          fontWeight: isActive ? 600 : 400,
+                          color: isActive ? 'primary.main' : 'text.primary',
+                          fontSize: '0.813rem',
+                        }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                );
+              })}
             </List>
           </>
         )}
