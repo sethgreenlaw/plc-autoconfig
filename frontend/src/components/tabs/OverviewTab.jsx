@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Card,
@@ -13,15 +13,40 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Button,
+  Snackbar,
 } from '@mui/material';
 import {
   FileUpload,
   DataObject,
   Business,
   Shield,
+  Download,
 } from '@mui/icons-material';
+import { api } from '../../api/client';
 
-const OverviewTab = ({ project, config }) => {
+const OverviewTab = ({ project, config, projectId }) => {
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+
+  const showSnackbar = (message, severity = 'success') => {
+    setSnackbar({ open: true, message, severity });
+  };
+
+  const handleExportConfig = async () => {
+    try {
+      const data = await api.exportConfig(projectId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project?.name || 'config'}-export.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showSnackbar('Configuration exported successfully', 'success');
+    } catch (err) {
+      showSnackbar(err.message || 'Export failed', 'error');
+    }
+  };
   const getStatusAlert = () => {
     if (!project || !config) return null;
 
@@ -88,17 +113,34 @@ const OverviewTab = ({ project, config }) => {
   ];
 
   return (
-    <Box>
+    <>
+      <Box>
       {/* Title */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
-          {project?.name || 'Project Overview'}
-        </Typography>
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          {project?.customer_name && project?.product_type
-            ? `${project.customer_name} • ${project.product_type}`
-            : 'No customer or product type specified'}
-        </Typography>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Box>
+          <Typography variant="h4" sx={{ fontWeight: 700, mb: 0.5 }}>
+            {project?.name || 'Project Overview'}
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            {project?.customer_name && project?.product_type
+              ? `${project.customer_name} • ${project.product_type}`
+              : 'No customer or product type specified'}
+          </Typography>
+        </Box>
+        {config && (
+          <Button
+            variant="contained"
+            startIcon={<Download />}
+            onClick={handleExportConfig}
+            sx={{
+              background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+              textTransform: 'none',
+              fontWeight: 600,
+            }}
+          >
+            Export Configuration
+          </Button>
+        )}
       </Box>
 
       {/* Status Alert */}
@@ -192,7 +234,19 @@ const OverviewTab = ({ project, config }) => {
           </CardContent>
         </Card>
       )}
-    </Box>
+      </Box>
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        message={snackbar.message}
+        sx={{
+          '& .MuiSnackbarContent-root': {
+            backgroundColor: snackbar.severity === 'error' ? '#ef4444' : '#22c55e',
+          },
+        }}
+      />
+    </>
   );
 };
 

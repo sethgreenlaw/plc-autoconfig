@@ -7,12 +7,10 @@ import {
   Typography,
   Stack,
   Alert,
-  LinearProgress,
   List,
   ListItem,
   ListItemIcon,
   ListItemText,
-  Chip,
 } from '@mui/material';
 import {
   CloudUpload,
@@ -20,33 +18,30 @@ import {
   CheckCircle,
   Close,
   AutoAwesome,
-  RadioButtonUnchecked,
   Download,
-  HourglassEmpty,
 } from '@mui/icons-material';
 import { api } from '../../api/client';
-
-const ANALYSIS_STAGES = [
-  'Parsing uploaded CSV files...',
-  'Scraping community website...',
-  'Extracting permits, fees & processes from website...',
-  'Matching peer city templates...',
-  'AI generating record types & workflows...',
-  'Building departments & user roles...',
-  'Finalizing configuration...',
-  'Complete',
-];
+import ActivityStreamPanel from '../ActivityStreamPanel';
 
 const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState('');
   const [analysisResult, setAnalysisResult] = useState(null); // { type: 'success'|'error', message }
   const [dragOver, setDragOver] = useState(false);
+  const [showActivityStream, setShowActivityStream] = useState(false);
+  const [activitySteps, setActivitySteps] = useState([
+    { id: 1, title: 'Parsing Uploaded Data', status: 'waiting', activity: null, error: null },
+    { id: 2, title: 'Deep-Scanning Community Website', status: 'waiting', activity: null, error: null },
+    { id: 3, title: 'AI Extraction & Analysis', status: 'waiting', activity: null, error: null },
+    { id: 4, title: 'AI Configuration Synthesis', status: 'waiting', activity: null, error: null },
+  ]);
+  const [overallProgress, setOverallProgress] = useState(0);
   const fileInputRef = useRef();
   const pollRef = useRef();
+  const lastCsvData = useRef(null);
+  const lastScrapeData = useRef(null);
+  const lastResearchData = useRef(null);
 
   const handleFiles = (newFiles) => {
     const csvFiles = Array.from(newFiles).filter((f) =>
@@ -94,6 +89,16 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
     }
   };
 
+  const updateStep = (stepId, status, activity = null, error = null) => {
+    setActivitySteps((prev) =>
+      prev.map((s) =>
+        s.id === stepId
+          ? { ...s, status, activity: activity || s.activity, error }
+          : s
+      )
+    );
+  };
+
   const handleUpload = async () => {
     if (files.length === 0) return;
     setUploading(true);
@@ -131,61 +136,210 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
   const handleAnalyze = async () => {
     setAnalyzing(true);
     setAnalysisResult(null);
-    setProgress(0);
-    setStage('Starting...');
+    setShowActivityStream(true);
+    setOverallProgress(0);
 
-    // Animated progress that matches real AI timing (~40-60 seconds)
-    const stages = ANALYSIS_STAGES;
-    let step = 0;
-    const progressTimer = setInterval(() => {
-      step++;
-      if (step <= stages.length) {
-        const pct = Math.min(95, Math.round((step / stages.length) * 95));
-        setProgress(pct);
-        setStage(stages[Math.min(step - 1, stages.length - 1)]);
-      }
-      if (step > stages.length) clearInterval(progressTimer);
-    }, 8000);
+    // Reset steps
+    setActivitySteps([
+      { id: 1, title: 'Parsing Uploaded Data', status: 'waiting', activity: null, error: null },
+      { id: 2, title: 'Deep-Scanning Community Website', status: 'waiting', activity: null, error: null },
+      { id: 3, title: 'AI Extraction & Analysis', status: 'waiting', activity: null, error: null },
+      { id: 4, title: 'AI Configuration Synthesis', status: 'waiting', activity: null, error: null },
+    ]);
 
-    // Ensure project exists on backend before starting analysis
     await ensureProjectExists();
 
+    let step2IntervalId = null;
+
+    // Track data through the pipeline
+    let csvData = null;
+    let scrapeData = null;
+    let researchData = null;
+
     try {
-      const result = await api.startAnalysis(projectId);
-      clearInterval(progressTimer);
-      setProgress(100);
-      setStage('Complete');
-      setAnalysisResult({ type: 'success', message: 'Configuration generated successfully! Check the other tabs to review.' });
-      setAnalyzing(false);
+      // Step 1: Parse CSV
+      updateStep(1, 'in_progress', {
+        title: 'Parsing Uploaded Data',
+        description: 'Reading and parsing uploaded CSV files...',
+        details: {},
+      });
+      setOverallProgress(5);
+      const step1Result = await api.analyzeStep1(projectId);
+      csvData = step1Result.csv_data;
+      lastCsvData.current = csvData;
+      updateStep(1, 'completed', step1Result.activity);
+      setOverallProgress(15);
 
-      // Cache intelligence & research data locally so other tabs can access it
-      // even if Vercel routes to a different serverless instance
+      // Step 2: Multi-pass deep scraping
+      let continuation = null;
+      let totalPages = 0;
+      let totalPdfs = 0;
+      let passNumber = 1;
+      const MAX_PASSES = 8; // Up to ~240 pages across 8 passes
+      let step2Result;
+
       try {
-        if (result?.intelligence) {
-          sessionStorage.setItem(`intel_${projectId}`, JSON.stringify({ status: 'available', report: result.intelligence }));
+        while (passNumber <= MAX_PASSES) {
+          // Update activity with current pass info
+          updateStep(2, 'in_progress', {
+            title: 'Deep-Scanning Community Website',
+            description: passNumber === 1
+              ? 'Connecting to community website... Scanning for permits, fees, ordinances, municipal codes...'
+              : `Pass ${passNumber}: Continuing deep scan... Found ${totalPages} pages and ${totalPdfs} PDFs so far...`,
+            details: { pass: passNumber, pages_so_far: totalPages, pdfs_so_far: totalPdfs },
+          });
+
+          const passData = continuation ? { continuation } : {};
+          step2Result = await api.analyzeStep2(projectId, passData);
+
+          if (step2Result.status === 'step_2_skipped' || step2Result.status === 'step_2_error') {
+            if (passNumber === 1) {
+              // First pass failed/skipped - no data at all
+              updateStep(2, step2Result.status === 'step_2_skipped' ? 'skipped' : 'failed', step2Result.activity);
+              scrapeData = null;
+            }
+            break;
+          }
+
+          // Accumulate results
+          scrapeData = step2Result.scrape_data || null;
+          lastScrapeData.current = scrapeData;
+          continuation = step2Result.continuation;
+          totalPages = continuation?.pages?.length || step2Result.activity?.details?.pages_scraped || totalPages;
+          totalPdfs = continuation?.pdfs?.length || step2Result.activity?.details?.pdfs_found || totalPdfs;
+
+          // Update progress within step 2 (15% to 45%)
+          const scrapeProgress = 15 + Math.min(30, (passNumber / MAX_PASSES) * 30);
+          setOverallProgress(Math.round(scrapeProgress));
+
+          // Check if there's more to scrape
+          if (!continuation?.has_more) {
+            break;
+          }
+
+          passNumber++;
         }
-      } catch {}
 
-      try { await onRefresh(); } catch {}
+        if (scrapeData) {
+          updateStep(2, 'completed', {
+            title: 'Deep Scan Complete',
+            description: `Completed ${passNumber} pass${passNumber > 1 ? 'es' : ''}: Found ${totalPages} pages and ${totalPdfs} PDFs across the community website`,
+            details: scrapeData ? {
+              pages_scraped: totalPages,
+              pdfs_found: totalPdfs,
+              passes: passNumber,
+              ...(step2Result?.activity?.details || {})
+            } : {},
+          });
+        }
+      } catch (scrapeErr) {
+        if (!scrapeData) {
+          // Only mark as failed if we got NO data
+          const errMsg = scrapeErr.message || 'Unknown error';
+          console.error('[Step 2] Scrape failed:', errMsg);
+          updateStep(2, 'failed', {
+            title: 'Website Scrape Failed',
+            description: `Error: ${errMsg}`,
+            details: { error: errMsg },
+          });
+        } else {
+          // We got some data before failing - mark as completed with what we have
+          updateStep(2, 'completed', {
+            title: 'Partial Scan Complete',
+            description: `Scraped ${totalPages} pages before timeout. Continuing with available data.`,
+            details: { pages_scraped: totalPages, pdfs_found: totalPdfs, passes: passNumber },
+          });
+        }
+      }
+      setOverallProgress(45);
+
+      // Step 3: AI Extract Data
+      updateStep(3, 'in_progress', {
+        title: 'AI Extraction & Analysis',
+        description: 'AI is analyzing scraped content... Identifying permits, fees, departments, workflows, and municipal code references...',
+        details: {},
+      });
+      setOverallProgress(45);
+      try {
+        const step3Result = await api.analyzeStep3(projectId, { scrape_data: scrapeData });
+        researchData = step3Result.research_data || null;
+        lastResearchData.current = researchData;
+        if (step3Result.status === 'step_3_skipped') {
+          updateStep(3, 'skipped', step3Result.activity);
+        } else {
+          updateStep(3, 'completed', step3Result.activity);
+          // Cache research data for Community Research tab
+          if (researchData) {
+            try {
+              sessionStorage.setItem(`research_${projectId}`, JSON.stringify(researchData));
+            } catch {}
+          }
+        }
+      } catch (extractErr) {
+        researchData = null;
+        updateStep(3, 'skipped', {
+          title: 'Extraction Skipped',
+          description: 'AI extraction unavailable — continuing with available data',
+          details: {},
+        });
+      }
+      setOverallProgress(65);
+
+      // Step 4: Generate Config
+      updateStep(4, 'in_progress', {
+        title: 'AI Configuration Synthesis',
+        description: 'AI is synthesizing all data sources... Building record types, mapping fee structures, generating workflow recommendations...',
+        details: {},
+      });
+      setOverallProgress(65);
+      try {
+        const step4Result = await api.analyzeStep4(projectId, {
+          csv_data: csvData,
+          research_data: researchData,
+          scrape_data: scrapeData,
+        });
+
+        if (!step4Result) {
+          throw new Error('No response from configuration generation');
+        }
+
+        updateStep(4, 'completed', step4Result.activity);
+        setOverallProgress(95);
+
+        // Cache intelligence data for Intelligence tab
+        if (step4Result.intelligence) {
+          try {
+            sessionStorage.setItem(`intel_${projectId}`, JSON.stringify({ status: 'available', report: step4Result.intelligence }));
+          } catch {}
+        }
+
+        setOverallProgress(100);
+        setAnalysisResult({ type: 'success', message: 'Configuration generated successfully! Check the other tabs to review.' });
+        setAnalyzing(false);
+        try {
+          await onRefresh();
+        } catch {}
+      } catch (genErr) {
+        updateStep(4, 'failed', null, genErr.message || 'Configuration generation failed');
+        setAnalysisResult({ type: 'error', message: genErr.message || 'Configuration generation failed. Please try again.' });
+        setAnalyzing(false);
+      }
     } catch (err) {
-      clearInterval(progressTimer);
-
-      // The request may have timed out but the backend might have finished.
+      clearInterval(step2IntervalId);
+      // Check if backend finished despite timeout
       try {
         const statusData = await api.getAnalysisStatus(projectId);
         if (statusData.status === 'configured') {
-          setProgress(100);
-          setStage('Complete');
-          setAnalysisResult({ type: 'success', message: 'Configuration generated successfully! Check the other tabs to review.' });
+          setOverallProgress(100);
+          setAnalysisResult({ type: 'success', message: 'Configuration generated successfully!' });
           setAnalyzing(false);
-          try { await onRefresh(); } catch {}
+          try {
+            await onRefresh();
+          } catch {}
           return;
         }
-      } catch {
-        // ignore status check failure
-      }
+      } catch {}
 
-      setProgress(0);
       setAnalysisResult({ type: 'error', message: err.message || 'Analysis failed. Please try again.' });
       setAnalyzing(false);
     }
@@ -384,74 +538,9 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
         </Box>
       )}
 
-      {/* Analysis Progress */}
-      {analyzing && (
-        <Card sx={{ mb: 3, borderColor: 'primary.main', borderWidth: 1 }}>
-          <CardContent>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-              <AutoAwesome sx={{ color: '#3b82f6' }} />
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: '#3b82f6' }}>
-                AI Analysis in Progress
-              </Typography>
-            </Box>
-            <LinearProgress
-              variant="determinate"
-              value={progress}
-              sx={{ mb: 2, height: 8, borderRadius: 4 }}
-            />
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                {stage}
-              </Typography>
-              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                {progress}%
-              </Typography>
-            </Box>
-            <Stack spacing={1}>
-              {ANALYSIS_STAGES.map((s, i) => {
-                const stageProgress = ((i + 1) * 100) / ANALYSIS_STAGES.length;
-                const done = progress >= stageProgress;
-                const current = !done && progress >= (i * 100) / ANALYSIS_STAGES.length;
-                return (
-                  <Box
-                    key={i}
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
-                      color: done ? 'success.main' : current ? 'primary.main' : 'text.secondary',
-                    }}
-                  >
-                    {done ? (
-                      <CheckCircle sx={{ fontSize: 18 }} />
-                    ) : current ? (
-                      <RadioButtonUnchecked
-                        sx={{
-                          fontSize: 18,
-                          animation: 'spin 1s linear infinite',
-                          '@keyframes spin': {
-                            '0%': { transform: 'rotate(0deg)' },
-                            '100%': { transform: 'rotate(360deg)' },
-                          },
-                        }}
-                      />
-                    ) : (
-                      <Box
-                        sx={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: '50%',
-                          border: '1px solid #e2e8f0',
-                        }}
-                      />
-                    )}
-                    <Typography variant="caption">{s}</Typography>
-                  </Box>
-                );
-              })}
-            </Stack>
-          </CardContent>
-        </Card>
+      {/* Activity Stream */}
+      {showActivityStream && (
+        <ActivityStreamPanel steps={activitySteps} overallProgress={overallProgress} onRetryStep={handleRetryStep} />
       )}
 
       {/* Analysis Result */}

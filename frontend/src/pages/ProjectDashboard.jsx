@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Box, CircularProgress, Typography } from '@mui/material';
+import { Box, CircularProgress, Typography, Alert } from '@mui/material';
 import { DRAWER_WIDTH } from '../theme';
 import { api } from '../api/client';
 import { useSnackbar } from '../context/SnackbarContext';
@@ -25,6 +25,7 @@ export default function ProjectDashboard() {
   const [project, setProject] = useState(null);
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [kvAvailable, setKvAvailable] = useState(true);
   const retryCount = useRef(0);
   const initialLoadDone = useRef(false);
 
@@ -110,6 +111,14 @@ export default function ProjectDashboard() {
   useEffect(() => {
     loadProject();
   }, [loadProject]);
+
+  useEffect(() => {
+    api.getKvStatus().then((status) => {
+      setKvAvailable(status.kv_available);
+    }).catch(() => {
+      setKvAvailable(false);
+    });
+  }, []);
 
   if (loading) {
     return (
@@ -202,6 +211,25 @@ export default function ProjectDashboard() {
             py: { xs: 2, sm: 3 },
           }}
         >
+          {/* Beta Disclaimer */}
+          <Alert
+            severity="info"
+            variant="outlined"
+            sx={{
+              mb: 2,
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59, 130, 246, 0.04)',
+              '& .MuiAlert-icon': { color: '#3b82f6' },
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              Beta Preview
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              This tool is in beta. AI-generated configurations should be reviewed by a domain expert before deployment.
+              {!kvAvailable && ' Data persistence is limited — export your configuration regularly.'}
+            </Typography>
+          </Alert>
           {renderTab()}
         </Box>
       </Box>

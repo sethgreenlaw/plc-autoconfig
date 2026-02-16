@@ -1,0 +1,1755 @@
+[
+  {
+    "id": "small-town-basic",
+    "name": "Small Town - Basic PLC",
+    "description": "Starter config for towns under 15,000 pop. Covers building permits, business licenses, and code complaints.",
+    "population": "< 15,000",
+    "tags": [
+      "small",
+      "basic",
+      "residential"
+    ],
+    "record_types": [
+      {
+        "name": "Residential Building Permit",
+        "category": "Building",
+        "form_fields": [
+          {
+            "name": "Property Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Parcel Number",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Contractor Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Contractor License #",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Project Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Estimated Value",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Square Footage",
+            "field_type": "number",
+            "required": false
+          }
+        ],
+        "fees": [
+          {
+            "name": "Building Permit Fee",
+            "amount": 150.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Plan Review Fee",
+            "amount": 75.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Clerk"
+          },
+          {
+            "name": "Plan Review",
+            "order": 2,
+            "assigned_role": "Plan Reviewer"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 3,
+            "assigned_role": "Building Official"
+          },
+          {
+            "name": "Inspection Scheduled",
+            "order": 4,
+            "assigned_role": "Inspector"
+          },
+          {
+            "name": "Final Inspection",
+            "order": 5,
+            "assigned_role": "Inspector"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Site Plan",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Construction Plans",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Contractor License",
+            "required": true,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Business License",
+        "category": "Licensing",
+        "form_fields": [
+          {
+            "name": "Business Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Business Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Business Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Retail",
+              "Food Service",
+              "Professional Services",
+              "Home Occupation",
+              "Other"
+            ]
+          },
+          {
+            "name": "EIN / Tax ID",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Number of Employees",
+            "field_type": "number",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "Annual License Fee",
+            "amount": 100.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Late Renewal Penalty",
+            "amount": 25.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Received",
+            "order": 1,
+            "assigned_role": "Clerk"
+          },
+          {
+            "name": "Zoning Review",
+            "order": 2,
+            "assigned_role": "Zoning Officer"
+          },
+          {
+            "name": "License Issued",
+            "order": 3,
+            "assigned_role": "Clerk"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "State Registration",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Certificate of Insurance",
+            "required": true,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Code Enforcement Complaint",
+        "category": "Code Enforcement",
+        "form_fields": [
+          {
+            "name": "Complaint Location",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Violation Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Property Maintenance",
+              "Zoning Violation",
+              "Noise",
+              "Overgrown Vegetation",
+              "Abandoned Vehicle",
+              "Other"
+            ]
+          },
+          {
+            "name": "Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Complainant Name",
+            "field_type": "text",
+            "required": false
+          },
+          {
+            "name": "Complainant Phone",
+            "field_type": "text",
+            "required": false
+          }
+        ],
+        "fees": [],
+        "workflow_steps": [
+          {
+            "name": "Complaint Filed",
+            "order": 1,
+            "assigned_role": "Clerk"
+          },
+          {
+            "name": "Investigation",
+            "order": 2,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Notice Issued",
+            "order": 3,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Re-Inspection",
+            "order": 4,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Resolution",
+            "order": 5,
+            "assigned_role": "Code Officer"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Photos of Violation",
+            "required": false,
+            "stage": "submission"
+          }
+        ]
+      }
+    ],
+    "departments": [
+      {
+        "name": "Building Department",
+        "description": "Handles building permits, plan review, and inspections"
+      },
+      {
+        "name": "Clerk's Office",
+        "description": "Manages business licenses, applications intake, and public records"
+      },
+      {
+        "name": "Code Enforcement",
+        "description": "Investigates and resolves code violations and complaints"
+      }
+    ],
+    "user_roles": [
+      {
+        "name": "Administrator",
+        "description": "Full system access",
+        "permissions": [
+          "manage_users",
+          "manage_config",
+          "view_reports",
+          "approve_all"
+        ]
+      },
+      {
+        "name": "Clerk",
+        "description": "Application intake and processing",
+        "permissions": [
+          "create_applications",
+          "update_status",
+          "collect_payments"
+        ]
+      },
+      {
+        "name": "Plan Reviewer",
+        "description": "Reviews construction plans and documents",
+        "permissions": [
+          "review_plans",
+          "add_comments",
+          "approve_plans"
+        ]
+      },
+      {
+        "name": "Inspector",
+        "description": "Conducts field inspections",
+        "permissions": [
+          "schedule_inspections",
+          "record_results",
+          "issue_violations"
+        ]
+      },
+      {
+        "name": "Code Officer",
+        "description": "Code enforcement investigations",
+        "permissions": [
+          "investigate_complaints",
+          "issue_notices",
+          "close_cases"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mid-city-full",
+    "name": "Mid-Size City - Full PLC Suite",
+    "description": "Comprehensive config for cities 15,000-100,000 pop. Full building, planning, licensing, and code enforcement.",
+    "population": "15,000 - 100,000",
+    "tags": [
+      "medium",
+      "comprehensive",
+      "commercial",
+      "residential"
+    ],
+    "record_types": [
+      {
+        "name": "Residential Building Permit",
+        "category": "Building",
+        "form_fields": [
+          {
+            "name": "Property Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Parcel/APN",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Phone",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Email",
+            "field_type": "email",
+            "required": true
+          },
+          {
+            "name": "Contractor Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Contractor License #",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Project Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "New Construction",
+              "Addition",
+              "Remodel",
+              "Repair",
+              "Demolition",
+              "Accessory Structure"
+            ]
+          },
+          {
+            "name": "Project Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Estimated Valuation",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Square Footage",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Number of Stories",
+            "field_type": "number",
+            "required": false
+          },
+          {
+            "name": "Flood Zone",
+            "field_type": "select",
+            "required": false,
+            "options": [
+              "Zone A",
+              "Zone AE",
+              "Zone X",
+              "None"
+            ]
+          }
+        ],
+        "fees": [
+          {
+            "name": "Building Permit Fee",
+            "amount": 250.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Plan Review Fee",
+            "amount": 125.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Technology Fee",
+            "amount": 15.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Valuation Surcharge",
+            "amount": 0.0,
+            "fee_type": "calculated",
+            "formula": "valuation * 0.015"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Completeness Check",
+            "order": 2,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Plan Review - Building",
+            "order": 3,
+            "assigned_role": "Plan Reviewer"
+          },
+          {
+            "name": "Plan Review - Fire",
+            "order": 4,
+            "assigned_role": "Fire Marshal"
+          },
+          {
+            "name": "Plan Review - Engineering",
+            "order": 5,
+            "assigned_role": "City Engineer"
+          },
+          {
+            "name": "Corrections Required",
+            "order": 6,
+            "assigned_role": "Plan Reviewer"
+          },
+          {
+            "name": "Approved for Issuance",
+            "order": 7,
+            "assigned_role": "Building Official"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 8,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Inspections",
+            "order": 9,
+            "assigned_role": "Building Inspector"
+          },
+          {
+            "name": "Final / Certificate of Occupancy",
+            "order": 10,
+            "assigned_role": "Building Official"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Site Plan",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Architectural Plans",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Structural Calculations",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Energy Compliance (Title 24)",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Soils Report",
+            "required": false,
+            "stage": "submission"
+          },
+          {
+            "name": "Contractor License Copy",
+            "required": true,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Commercial Building Permit",
+        "category": "Building",
+        "form_fields": [
+          {
+            "name": "Property Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Parcel/APN",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Applicant/Agent",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Architect of Record",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "General Contractor",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Project Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "New Commercial",
+              "Tenant Improvement",
+              "Addition",
+              "Renovation",
+              "Change of Use"
+            ]
+          },
+          {
+            "name": "Occupancy Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Assembly",
+              "Business",
+              "Educational",
+              "Factory",
+              "Hazardous",
+              "Institutional",
+              "Mercantile",
+              "Residential",
+              "Storage",
+              "Utility"
+            ]
+          },
+          {
+            "name": "Project Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Estimated Valuation",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Building Area (sq ft)",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "ADA Compliance",
+            "field_type": "checkbox",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "Commercial Permit Fee",
+            "amount": 500.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Plan Review Fee",
+            "amount": 250.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Fire Review Fee",
+            "amount": 150.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Technology Fee",
+            "amount": 25.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Completeness Review",
+            "order": 2,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Plan Review - Building",
+            "order": 3,
+            "assigned_role": "Plan Reviewer"
+          },
+          {
+            "name": "Plan Review - Fire/Life Safety",
+            "order": 4,
+            "assigned_role": "Fire Marshal"
+          },
+          {
+            "name": "Plan Review - Public Works",
+            "order": 5,
+            "assigned_role": "City Engineer"
+          },
+          {
+            "name": "Plan Review - Planning/Zoning",
+            "order": 6,
+            "assigned_role": "Planner"
+          },
+          {
+            "name": "Corrections Cycle",
+            "order": 7,
+            "assigned_role": "Plan Reviewer"
+          },
+          {
+            "name": "Final Approval",
+            "order": 8,
+            "assigned_role": "Building Official"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 9,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Inspections",
+            "order": 10,
+            "assigned_role": "Building Inspector"
+          },
+          {
+            "name": "Certificate of Occupancy",
+            "order": 11,
+            "assigned_role": "Building Official"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Architectural Plans (stamped)",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Structural Plans & Calcs",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "MEP Plans",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Fire Sprinkler Plans",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Energy Compliance",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "ADA Compliance Report",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Geotechnical Report",
+            "required": false,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Encroachment Permit",
+        "category": "Public Works",
+        "form_fields": [
+          {
+            "name": "Location/Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Work Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Encroachment Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Sidewalk Cut",
+              "Street Cut",
+              "Driveway Approach",
+              "Utility Trench",
+              "Other"
+            ]
+          },
+          {
+            "name": "Contractor Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Start Date",
+            "field_type": "date",
+            "required": true
+          },
+          {
+            "name": "End Date",
+            "field_type": "date",
+            "required": true
+          },
+          {
+            "name": "Traffic Control Required",
+            "field_type": "checkbox",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "Encroachment Permit Fee",
+            "amount": 200.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Inspection Fee",
+            "amount": 100.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Engineering Review",
+            "order": 2,
+            "assigned_role": "City Engineer"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 3,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Pre-Construction Inspection",
+            "order": 4,
+            "assigned_role": "Inspector"
+          },
+          {
+            "name": "Final Inspection",
+            "order": 5,
+            "assigned_role": "Inspector"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Traffic Control Plan",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Site Plan/Drawings",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Insurance Certificate",
+            "required": true,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Business License",
+        "category": "Licensing",
+        "form_fields": [
+          {
+            "name": "Business Name (DBA)",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Legal Entity Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Business Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Mailing Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner/Manager Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Phone",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Email",
+            "field_type": "email",
+            "required": true
+          },
+          {
+            "name": "NAICS Code",
+            "field_type": "text",
+            "required": false
+          },
+          {
+            "name": "Business Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Retail",
+              "Restaurant/Food",
+              "Professional Services",
+              "Contractor",
+              "Home Occupation",
+              "Mobile/Vendor",
+              "Manufacturing",
+              "Other"
+            ]
+          },
+          {
+            "name": "Number of Employees",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Estimated Annual Revenue",
+            "field_type": "number",
+            "required": false
+          }
+        ],
+        "fees": [
+          {
+            "name": "Business License Fee",
+            "amount": 150.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Home Occupation Surcharge",
+            "amount": 50.0,
+            "fee_type": "conditional"
+          },
+          {
+            "name": "Late Penalty (per month)",
+            "amount": 25.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Received",
+            "order": 1,
+            "assigned_role": "License Clerk"
+          },
+          {
+            "name": "Zoning Verification",
+            "order": 2,
+            "assigned_role": "Planner"
+          },
+          {
+            "name": "Fire Inspection Required",
+            "order": 3,
+            "assigned_role": "Fire Marshal"
+          },
+          {
+            "name": "Approved",
+            "order": 4,
+            "assigned_role": "License Clerk"
+          },
+          {
+            "name": "License Issued",
+            "order": 5,
+            "assigned_role": "License Clerk"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "State Business Registration",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Federal EIN",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Certificate of Insurance",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Lease Agreement",
+            "required": false,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Special Event Permit",
+        "category": "Licensing",
+        "form_fields": [
+          {
+            "name": "Event Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Event Location",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Event Date(s)",
+            "field_type": "date",
+            "required": true
+          },
+          {
+            "name": "Setup Time",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Event Hours",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Expected Attendance",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Alcohol Served",
+            "field_type": "checkbox",
+            "required": true
+          },
+          {
+            "name": "Road Closures Needed",
+            "field_type": "checkbox",
+            "required": true
+          },
+          {
+            "name": "Amplified Sound",
+            "field_type": "checkbox",
+            "required": true
+          },
+          {
+            "name": "Food Vendors",
+            "field_type": "number",
+            "required": false
+          }
+        ],
+        "fees": [
+          {
+            "name": "Event Permit Fee",
+            "amount": 200.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Road Closure Fee",
+            "amount": 300.0,
+            "fee_type": "conditional"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Clerk"
+          },
+          {
+            "name": "Police Review",
+            "order": 2,
+            "assigned_role": "Police Dept"
+          },
+          {
+            "name": "Fire Review",
+            "order": 3,
+            "assigned_role": "Fire Marshal"
+          },
+          {
+            "name": "Public Works Review",
+            "order": 4,
+            "assigned_role": "City Engineer"
+          },
+          {
+            "name": "Final Approval",
+            "order": 5,
+            "assigned_role": "City Manager"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 6,
+            "assigned_role": "Clerk"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Event Site Map",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Certificate of Insurance",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "ABC Permit (if alcohol)",
+            "required": false,
+            "stage": "submission"
+          }
+        ]
+      },
+      {
+        "name": "Code Enforcement Case",
+        "category": "Code Enforcement",
+        "form_fields": [
+          {
+            "name": "Violation Location",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Violation Category",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Property Maintenance",
+              "Zoning Violation",
+              "Building w/o Permit",
+              "Sign Violation",
+              "Noise",
+              "Overgrown Vegetation",
+              "Abandoned Vehicle",
+              "Illegal Dumping",
+              "Other"
+            ]
+          },
+          {
+            "name": "Description",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Complainant Name",
+            "field_type": "text",
+            "required": false
+          },
+          {
+            "name": "Complainant Phone",
+            "field_type": "text",
+            "required": false
+          },
+          {
+            "name": "Anonymous Complaint",
+            "field_type": "checkbox",
+            "required": false
+          }
+        ],
+        "fees": [],
+        "workflow_steps": [
+          {
+            "name": "Complaint Received",
+            "order": 1,
+            "assigned_role": "Code Enforcement Clerk"
+          },
+          {
+            "name": "Case Assigned",
+            "order": 2,
+            "assigned_role": "Code Enforcement Supervisor"
+          },
+          {
+            "name": "Initial Investigation",
+            "order": 3,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Notice of Violation",
+            "order": 4,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Compliance Period",
+            "order": 5,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Re-Inspection",
+            "order": 6,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Citation / Abatement",
+            "order": 7,
+            "assigned_role": "Code Officer"
+          },
+          {
+            "name": "Case Closed",
+            "order": 8,
+            "assigned_role": "Code Enforcement Supervisor"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Violation Photos",
+            "required": false,
+            "stage": "investigation"
+          }
+        ]
+      }
+    ],
+    "departments": [
+      {
+        "name": "Building & Safety",
+        "description": "Building permits, plan review, inspections, and code compliance"
+      },
+      {
+        "name": "Planning & Zoning",
+        "description": "Land use planning, zoning verification, and entitlements"
+      },
+      {
+        "name": "Public Works/Engineering",
+        "description": "Encroachment permits, infrastructure, and capital projects"
+      },
+      {
+        "name": "Fire Prevention",
+        "description": "Fire safety review, inspections, and special hazard permits"
+      },
+      {
+        "name": "Business License Division",
+        "description": "Business licensing, renewals, and revenue collection"
+      },
+      {
+        "name": "Code Enforcement",
+        "description": "Municipal code compliance, investigations, and abatement"
+      }
+    ],
+    "user_roles": [
+      {
+        "name": "System Administrator",
+        "description": "Full system configuration and management",
+        "permissions": [
+          "manage_all"
+        ]
+      },
+      {
+        "name": "Department Director",
+        "description": "Department oversight and final approvals",
+        "permissions": [
+          "approve_all",
+          "view_reports",
+          "manage_staff"
+        ]
+      },
+      {
+        "name": "Permit Technician",
+        "description": "Intake, routing, and issuance of permits",
+        "permissions": [
+          "create_applications",
+          "update_status",
+          "collect_payments",
+          "issue_permits"
+        ]
+      },
+      {
+        "name": "Plan Reviewer",
+        "description": "Technical review of construction plans",
+        "permissions": [
+          "review_plans",
+          "add_comments",
+          "request_corrections",
+          "approve_plans"
+        ]
+      },
+      {
+        "name": "Building Inspector",
+        "description": "Field inspections for building permits",
+        "permissions": [
+          "schedule_inspections",
+          "record_results",
+          "approve_inspections"
+        ]
+      },
+      {
+        "name": "Fire Marshal / Fire Reviewer",
+        "description": "Fire and life safety reviews and inspections",
+        "permissions": [
+          "review_fire",
+          "approve_fire",
+          "schedule_inspections"
+        ]
+      },
+      {
+        "name": "City Engineer",
+        "description": "Engineering review for public works permits",
+        "permissions": [
+          "review_engineering",
+          "approve_engineering"
+        ]
+      },
+      {
+        "name": "Planner / Zoning Officer",
+        "description": "Zoning verification and planning review",
+        "permissions": [
+          "review_zoning",
+          "verify_land_use"
+        ]
+      },
+      {
+        "name": "Code Enforcement Officer",
+        "description": "Investigates complaints and enforces codes",
+        "permissions": [
+          "investigate_complaints",
+          "issue_notices",
+          "issue_citations"
+        ]
+      },
+      {
+        "name": "License Clerk",
+        "description": "Business license processing and renewals",
+        "permissions": [
+          "process_licenses",
+          "collect_payments",
+          "issue_licenses"
+        ]
+      },
+      {
+        "name": "Public Portal User",
+        "description": "External applicant self-service access",
+        "permissions": [
+          "submit_applications",
+          "upload_documents",
+          "make_payments",
+          "view_status"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "county-planning",
+    "name": "County - Planning & Land Use",
+    "description": "County-level configuration focused on planning, land use, subdivisions, and environmental review.",
+    "population": "County-level",
+    "tags": [
+      "county",
+      "planning",
+      "land_use",
+      "environmental"
+    ],
+    "record_types": [
+      {
+        "name": "Conditional Use Permit (CUP)",
+        "category": "Planning",
+        "form_fields": [
+          {
+            "name": "Property Address/APN",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Property Owner",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Applicant Name",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Proposed Use",
+            "field_type": "textarea",
+            "required": true
+          },
+          {
+            "name": "Current Zoning",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Lot Size (acres)",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Adjacent Land Uses",
+            "field_type": "textarea",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "CUP Application Fee",
+            "amount": 2500.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Environmental Review Fee",
+            "amount": 1500.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Public Notice Fee",
+            "amount": 300.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Submitted",
+            "order": 1,
+            "assigned_role": "Planning Technician"
+          },
+          {
+            "name": "Completeness Review",
+            "order": 2,
+            "assigned_role": "Planner"
+          },
+          {
+            "name": "Environmental Review (CEQA)",
+            "order": 3,
+            "assigned_role": "Environmental Planner"
+          },
+          {
+            "name": "Staff Report Prepared",
+            "order": 4,
+            "assigned_role": "Senior Planner"
+          },
+          {
+            "name": "Public Hearing Notice",
+            "order": 5,
+            "assigned_role": "Planning Technician"
+          },
+          {
+            "name": "Planning Commission Hearing",
+            "order": 6,
+            "assigned_role": "Planning Commission"
+          },
+          {
+            "name": "Decision / Conditions",
+            "order": 7,
+            "assigned_role": "Planning Director"
+          },
+          {
+            "name": "Appeal Period",
+            "order": 8,
+            "assigned_role": "Planning Technician"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Site Plan (to scale)",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Project Description Narrative",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Environmental Assessment",
+            "required": true,
+            "stage": "review"
+          },
+          {
+            "name": "Traffic Impact Study",
+            "required": false,
+            "stage": "review"
+          }
+        ]
+      },
+      {
+        "name": "Subdivision / Tentative Map",
+        "category": "Planning",
+        "form_fields": [
+          {
+            "name": "Property Address/APN",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Owner/Developer",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Engineer of Record",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Number of Lots",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Total Acreage",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Subdivision Type",
+            "field_type": "select",
+            "required": true,
+            "options": [
+              "Residential",
+              "Commercial",
+              "Mixed Use",
+              "Industrial"
+            ]
+          },
+          {
+            "name": "Proposed Infrastructure",
+            "field_type": "textarea",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "Tentative Map Fee",
+            "amount": 5000.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Per Lot Fee",
+            "amount": 200.0,
+            "fee_type": "per_unit"
+          },
+          {
+            "name": "Environmental Review",
+            "amount": 3000.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application Filed",
+            "order": 1,
+            "assigned_role": "Planning Technician"
+          },
+          {
+            "name": "Completeness Review",
+            "order": 2,
+            "assigned_role": "Senior Planner"
+          },
+          {
+            "name": "Agency Circulation",
+            "order": 3,
+            "assigned_role": "Planner"
+          },
+          {
+            "name": "Environmental Review",
+            "order": 4,
+            "assigned_role": "Environmental Planner"
+          },
+          {
+            "name": "Conditions Development",
+            "order": 5,
+            "assigned_role": "Senior Planner"
+          },
+          {
+            "name": "Planning Commission",
+            "order": 6,
+            "assigned_role": "Planning Commission"
+          },
+          {
+            "name": "Board of Supervisors",
+            "order": 7,
+            "assigned_role": "Board"
+          },
+          {
+            "name": "Final Map Recordation",
+            "order": 8,
+            "assigned_role": "Planning Technician"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Tentative Map (engineered)",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Preliminary Grading Plan",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Utility Plan",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Environmental Impact Report",
+            "required": true,
+            "stage": "review"
+          },
+          {
+            "name": "Traffic Study",
+            "required": true,
+            "stage": "review"
+          },
+          {
+            "name": "Water/Sewer Will-Serve Letters",
+            "required": true,
+            "stage": "review"
+          }
+        ]
+      },
+      {
+        "name": "Grading Permit",
+        "category": "Building",
+        "form_fields": [
+          {
+            "name": "Site Address",
+            "field_type": "text",
+            "required": true
+          },
+          {
+            "name": "Cut Volume (cubic yards)",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Fill Volume (cubic yards)",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "Disturbed Area (sq ft)",
+            "field_type": "number",
+            "required": true
+          },
+          {
+            "name": "SWPPP Required",
+            "field_type": "checkbox",
+            "required": true
+          }
+        ],
+        "fees": [
+          {
+            "name": "Grading Permit Fee",
+            "amount": 750.0,
+            "fee_type": "flat"
+          },
+          {
+            "name": "Erosion Control Fee",
+            "amount": 250.0,
+            "fee_type": "flat"
+          }
+        ],
+        "workflow_steps": [
+          {
+            "name": "Application",
+            "order": 1,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Engineering Review",
+            "order": 2,
+            "assigned_role": "County Engineer"
+          },
+          {
+            "name": "Environmental Check",
+            "order": 3,
+            "assigned_role": "Environmental Planner"
+          },
+          {
+            "name": "Permit Issued",
+            "order": 4,
+            "assigned_role": "Permit Technician"
+          },
+          {
+            "name": "Inspections",
+            "order": 5,
+            "assigned_role": "Inspector"
+          }
+        ],
+        "required_documents": [
+          {
+            "name": "Grading Plan (engineered)",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "Soils/Geotechnical Report",
+            "required": true,
+            "stage": "submission"
+          },
+          {
+            "name": "SWPPP",
+            "required": true,
+            "stage": "submission"
+          }
+        ]
+      }
+    ],
+    "departments": [
+      {
+        "name": "Planning & Development",
+        "description": "Land use planning, zoning, and entitlements"
+      },
+      {
+        "name": "Public Works / Engineering",
+        "description": "Grading, infrastructure, and public improvement review"
+      },
+      {
+        "name": "Environmental Resources",
+        "description": "CEQA review, environmental compliance, and sustainability"
+      },
+      {
+        "name": "Building & Safety",
+        "description": "Structural review, building permits, and inspections"
+      }
+    ],
+    "user_roles": [
+      {
+        "name": "Planning Director",
+        "description": "Oversees planning department, final authority",
+        "permissions": [
+          "manage_all",
+          "approve_all"
+        ]
+      },
+      {
+        "name": "Senior Planner",
+        "description": "Complex project review and staff reports",
+        "permissions": [
+          "review_plans",
+          "write_reports",
+          "present_hearings"
+        ]
+      },
+      {
+        "name": "Associate Planner",
+        "description": "Project review and processing",
+        "permissions": [
+          "review_plans",
+          "add_conditions"
+        ]
+      },
+      {
+        "name": "Planning Technician",
+        "description": "Intake, routing, and records",
+        "permissions": [
+          "create_applications",
+          "route_applications"
+        ]
+      },
+      {
+        "name": "Environmental Planner",
+        "description": "CEQA and environmental review",
+        "permissions": [
+          "review_environmental",
+          "approve_environmental"
+        ]
+      },
+      {
+        "name": "County Engineer",
+        "description": "Engineering and infrastructure review",
+        "permissions": [
+          "review_engineering",
+          "approve_engineering"
+        ]
+      }
+    ]
+  }
+]

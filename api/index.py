@@ -3,11 +3,16 @@ OpenGov Auto Implementation Backend - Single File FastAPI Application
 Complete backend for AI-powered implementation configuration from CSV data
 """
 
+# ═══════════════════════════════════════════════════════════════
+# 1. IMPORTS
+# ═══════════════════════════════════════════════════════════════
 import base64
 import csv
 import io
 import json
 import os
+import pathlib as _pathlib
+import time as _time_module
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -15,7 +20,7 @@ from contextlib import asynccontextmanager
 
 import uuid
 from pydantic import BaseModel, Field
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # Try to import anthropic, fallback to mock if not available
@@ -26,7 +31,168 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 
+
+# ═══════════════════════════════════════════════════════════════
+# 2. CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+AI_MODEL = "claude-sonnet-4-20250514"
+AI_TIMEOUT = 50.0
+AI_MAX_TOKENS = 4000
+SCRAPE_TIME_LIMIT = 45
+SCRAPE_MAX_PAGES_PER_PASS = 30
+# (set in CONFIGURATION section)
+TEXT_PER_PAGE = 8000
+COMBINED_TEXT_CAP = 150000
+AI_INPUT_CAP = 40000
+RAW_TEXT_CAP = 15000
+RESEARCH_CAP = 10000
+UPLOAD_DIR = "/tmp/plc-uploads"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 4. UTILITIES (Helpers)
+# ═══════════════════════════════════════════════════════════════
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL by ensuring it has a protocol.
+
+    Args:
+        url: URL string to normalize
+
+    Returns:
+        URL with https:// prepended if no protocol found
+    """
+    if not url:
+        return ""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        return f"https://{url}"
+    return url
+
+
+def _extract_json_from_text(text: str, json_type: str = "auto") -> Optional[Dict]:
+    """Extract JSON from text, handling both list and object formats.
+    
+    Args:
+        text: Text potentially containing JSON
+        json_type: "list", "object", or "auto" for auto-detection
+    
+    Returns:
+        Parsed JSON data or None if not found/invalid
+    """
+    if not text:
+        return None
+
+    try:
+        # Try direct JSON parse first
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    
+    # Try to extract JSON from text
+    try:
+        if json_type == "list" or json_type == "auto":
+            match = re.search(r'\[.*\]', text, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        
+        if json_type == "object" or json_type == "auto":
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+    except json.JSONDecodeError:
+        pass
+    
+    return None
+
+
+def _get_project_or_404(project_id: str):
+    """Get a project or raise 404 HTTPException.
+    
+    Args:
+        project_id: The project ID to retrieve
+        
+    Returns:
+        The Project object
+        
+    Raises:
+        HTTPException with status 404 if project not found
+    """
+    project = store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+async def _parse_json_body(request: Request) -> dict:
+    """Parse JSON from request body.
+    
+    Args:
+        request: FastAPI Request object
+        
+    Returns:
+        Parsed JSON dictionary
+        
+    Raises:
+        HTTPException with status 400 if JSON is invalid
+    """
+    try:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+
+
 # ============================================================================
+
+def _format_research_for_analysis(research: dict) -> str:
+    """Format research data as context string for Claude analysis prompt."""
+    parts = []
+
+    parts.append(f"## Community Research: {research.get('community_name', 'Unknown')}")
+    parts.append(f"Website: {research.get('website_url', 'N/A')}")
+    parts.append(f"\n{research.get('research_summary', '')}")
+
+    if research.get('permits_found'):
+        parts.append("\n### Permits & Licenses Found:")
+        for p in research.get('permits_found', []):
+            parts.append(f"- **{p.get('name', 'Unknown')}**: {p.get('description', 'N/A')} (Timeline: {p.get('typical_timeline', 'N/A')})")
+
+    if research.get('fee_schedule'):
+        parts.append("\n### Fee Schedule:")
+        for f in research.get('fee_schedule', []):
+            parts.append(f"- {f.get('permit_type', 'Unknown')} - {f.get('fee_name', 'Unknown')}: {f.get('amount', 'N/A')} ({f.get('notes', 'N/A')})")
+
+    if research.get('departments'):
+        parts.append("\n### Departments:")
+        for d in research.get('departments', []):
+            parts.append(f"- **{d.get('name', 'Unknown')}**: {d.get('description', 'N/A')}")
+
+    if research.get('ordinances'):
+        parts.append("\n### Municipal Codes & Ordinances:")
+        for o in research.get('ordinances', []):
+            parts.append(f"- **{o.get('code', 'Unknown')}**: {o.get('summary', 'N/A')}")
+            for prov in o.get('key_provisions', []):
+                parts.append(f"  - {prov}")
+
+    if research.get('processes'):
+        parts.append("\n### Standard Processes:")
+        for proc in research.get('processes', []):
+            parts.append(f"- **{proc.get('name', 'Unknown')}**:")
+            for i, step in enumerate(proc.get('steps', []), 1):
+                parts.append(f"  {i}. {step}")
+
+    if research.get('documents_commonly_required'):
+        parts.append("\n### Commonly Required Documents:")
+        for doc in research.get('documents_commonly_required', []):
+            parts.append(f"- {doc}")
+
+    # Cap research data at RESEARCH_CAP to keep total prompt within timeout limit
+    result = "\n".join(parts)
+    return result[:RESEARCH_CAP]
+
+
+
 # PYDANTIC MODELS
 # ============================================================================
 
@@ -270,11 +436,14 @@ try:
         KV_AVAILABLE = True
         print(f"[KV] Upstash Redis connected: {_kv_url[:40]}...")
     else:
-        print("[KV] No Upstash credentials found, using /tmp per-project fallback")
+        print("[WARNING] WARNING: Upstash Redis NOT configured. Data will be lost on cold start!")
+        print("[WARNING] Set KV_REST_API_URL and KV_REST_API_TOKEN environment variables for persistent storage.")
 except ImportError:
-    print("[KV] upstash-redis package not installed, using /tmp per-project fallback")
+    print("[WARNING] WARNING: upstash-redis package not installed. Data will be lost on cold start!")
+    print("[WARNING] Set KV_REST_API_URL and KV_REST_API_TOKEN environment variables for persistent storage.")
 except Exception as e:
-    print(f"[KV] Failed to connect: {e}")
+    print(f"[WARNING] WARNING: Failed to connect to Upstash Redis: {e}")
+    print("[WARNING] Data will be lost on cold start! Check your KV_REST_API_URL and KV_REST_API_TOKEN.")
 
 
 def _kv_get(key):
@@ -374,6 +543,8 @@ class InMemoryStore:
     def __init__(self):
         self._projects = {}
         self._load_from_disk()
+        # Try to recover projects from KV after cold start
+        self._recover_from_kv()
 
     def _load_from_disk(self):
         """Load from /tmp as fallback cache."""
@@ -391,6 +562,22 @@ class InMemoryStore:
                 data = _load_project_file(pid)
                 if data:
                     self._projects[pid] = data
+
+    def _recover_from_kv(self):
+        """Try to recover projects from KV after cold start."""
+        if not KV_AVAILABLE:
+            return
+        try:
+            # Get list of project IDs from KV
+            project_list = _kv_get("project_list") or []
+            for pid in project_list:
+                if pid not in self._projects:
+                    project_data = _kv_get(f"project:{pid}")
+                    if project_data:
+                        self._projects[pid] = project_data
+                        print(f"[KV] Recovered project {pid} from KV on cold start")
+        except Exception as e:
+            print(f"[KV] Recovery failed: {e}")
 
     def _save_to_disk(self):
         """Save to /tmp as local cache (both monolithic and per-project)."""
@@ -444,6 +631,17 @@ class InMemoryStore:
                 project_dict[key] = project_dict[key].isoformat()
         self._projects[project.id] = project_dict
         self._persist_project(project.id)
+
+        # Update project_list in KV to enable recovery on cold start
+        if KV_AVAILABLE:
+            try:
+                project_list = _kv_get("project_list") or []
+                if project.id not in project_list:
+                    project_list.append(project.id)
+                    _kv_set("project_list", project_list)
+            except Exception as e:
+                print(f"[KV] Failed to update project_list: {e}")
+
         return project
 
     def get_project(self, project_id: str) -> Optional[Project]:
@@ -535,6 +733,17 @@ class InMemoryStore:
         if project_id in self._projects:
             del self._projects[project_id]
             _kv_delete(f"project:{project_id}")
+
+            # Remove from project_list in KV
+            if KV_AVAILABLE:
+                try:
+                    project_list = _kv_get("project_list") or []
+                    if project_id in project_list:
+                        project_list.remove(project_id)
+                        _kv_set("project_list", project_list)
+                except Exception as e:
+                    print(f"[KV] Failed to update project_list on delete: {e}")
+
             self._save_to_disk()
             return True
         return False
@@ -695,16 +904,17 @@ class CSVParser:
     def to_summary_string(metadata: dict) -> str:
         """Convert metadata to a string suitable for Claude prompt"""
         lines = []
-        lines.append(f"Total rows: {metadata['total_rows']}")
-        lines.append(f"Columns ({len(metadata['columns'])}): {', '.join(metadata['columns'])}")
+        lines.append(f"Total rows: {metadata.get('total_rows', 0)}")
+        cols = metadata.get('columns', [])
+        lines.append(f"Columns ({len(cols)}): {', '.join(cols)}")
         lines.append("")
         lines.append("Column Analysis:")
-        for col, info in metadata['column_analysis'].items():
-            sample = info['sample_values'][:5]
-            lines.append(f"  {col}: {info['unique_count']} unique values, samples: {sample}")
+        for col, info in metadata.get('column_analysis', {}).items():
+            sample = info.get('sample_values', [])[:5]
+            lines.append(f"  {col}: {info.get('unique_count', 0)} unique values, samples: {sample}")
         lines.append("")
         lines.append("Sample Rows (first 5):")
-        for i, row in enumerate(metadata['sample_rows'][:5]):
+        for i, row in enumerate(metadata.get('sample_rows', [])[:5]):
             lines.append(f"  Row {i+1}: {dict(row)}")
         return "\n".join(lines)
 
@@ -713,210 +923,11 @@ class CSVParser:
 # WEB RESEARCHER
 # ============================================================================
 
-class WebResearcher:
-    """Researches local government websites to gather ordinances, fees, and processes."""
-
-    def __init__(self):
-        self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
-
-    def research_community(self, community_url: str, community_name: str = "") -> dict:
-        """Research a community's government website for PLC configuration data."""
-        return self._generate_mock_research(community_url, community_name)
-
-    def _generate_mock_research(self, url: str, name: str) -> dict:
-        """Generate realistic mock research data for demo purposes."""
-        community = name or "the community"
-
-        return {
-            "community_name": community,
-            "website_url": url,
-            "research_summary": f"Comprehensive research of {community}'s local government website completed. Found detailed information about permit processes, fee schedules, municipal codes, and departmental structure.",
-            "permits_found": [
-                {"name": "Building Permit", "description": f"{community} requires building permits for new construction, additions, renovations over $5,000, and structural modifications. Applications reviewed by Planning & Building Dept.", "typical_timeline": "2-6 weeks"},
-                {"name": "Business License", "description": f"All businesses operating within {community} city limits must obtain an annual business license. Home-based businesses included.", "typical_timeline": "5-10 business days"},
-                {"name": "Encroachment Permit", "description": f"{community} Public Works requires encroachment permits for any work within the public right-of-way including sidewalks, curbs, and utilities.", "typical_timeline": "1-3 weeks"},
-                {"name": "Sign Permit", "description": f"Required for all new signs, changes to existing signs, or temporary signs in {community}. Must comply with sign ordinance Chapter 17.40.", "typical_timeline": "1-2 weeks"},
-                {"name": "Grading Permit", "description": f"Required for earth-moving activities over 50 cubic yards in {community}.", "typical_timeline": "2-4 weeks"},
-                {"name": "Conditional Use Permit", "description": f"Required for uses not permitted by right in specific zoning districts per {community} Zoning Code.", "typical_timeline": "6-12 weeks (requires public hearing)"},
-            ],
-            "fee_schedule": [
-                {"permit_type": "Building Permit", "fee_name": "Plan Check Fee", "amount": "65% of building permit fee", "notes": "Based on project valuation"},
-                {"permit_type": "Building Permit", "fee_name": "Building Permit Fee", "amount": "Per CBC Table 1-A", "notes": "Based on project valuation using ICC valuation table"},
-                {"permit_type": "Building Permit", "fee_name": "Technology Fee", "amount": "$30.00", "notes": "Flat fee per application"},
-                {"permit_type": "Building Permit", "fee_name": "SMIP Fee", "amount": "$0.13 per $1,000 valuation", "notes": "Strong Motion Instrumentation Program"},
-                {"permit_type": "Building Permit", "fee_name": "Green Building Fee", "amount": "$4.50 per $1,000 valuation", "notes": "CalGreen compliance review"},
-                {"permit_type": "Business License", "fee_name": "Application Fee", "amount": "$125.00", "notes": "Non-refundable"},
-                {"permit_type": "Business License", "fee_name": "Annual Renewal", "amount": "$75.00 - $500.00", "notes": "Based on number of employees"},
-                {"permit_type": "Business License", "fee_name": "Home Occupation", "amount": "$50.00", "notes": "Annual fee for home-based businesses"},
-                {"permit_type": "Encroachment", "fee_name": "Permit Fee", "amount": "$275.00", "notes": "Base fee"},
-                {"permit_type": "Encroachment", "fee_name": "Inspection Deposit", "amount": "$1,500.00", "notes": "Refundable upon satisfactory completion"},
-                {"permit_type": "Fire Prevention", "fee_name": "Fire Alarm Permit", "amount": "$250.00", "notes": "New installations"},
-                {"permit_type": "Fire Prevention", "fee_name": "Sprinkler Plan Review", "amount": "$175.00", "notes": "Per plan set"},
-            ],
-            "departments": [
-                {"name": "Community Development", "description": f"Oversees planning, building, and code enforcement for {community}. Manages building permits, plan reviews, and inspections.", "phone": "(555) 555-0100"},
-                {"name": "Business License Division", "description": f"Part of the Finance Department. Processes all business licenses and renewals for {community}.", "phone": "(555) 555-0200"},
-                {"name": "Public Works", "description": f"Manages {community}'s infrastructure including streets, sidewalks, storm drains, and rights-of-way.", "phone": "(555) 555-0300"},
-                {"name": "Fire Prevention Bureau", "description": f"Part of {community} Fire Department. Handles fire prevention permits, inspections, and plan reviews.", "phone": "(555) 555-0400"},
-                {"name": "Code Enforcement", "description": f"Ensures compliance with {community}'s municipal codes, property maintenance standards, and zoning regulations.", "phone": "(555) 555-0500"},
-            ],
-            "ordinances": [
-                {"code": "Title 15 - Buildings and Construction", "summary": f"Adopts California Building Code with {community}-specific amendments. Covers building permits, plan reviews, inspections, and compliance.", "key_provisions": ["Permit required for work over $500", "Plans required for projects over $5,000", "Licensed contractor required for projects over $500"]},
-                {"code": "Title 17 - Zoning", "summary": f"{community} Zoning Ordinance establishing land use districts, permitted uses, development standards, and approval processes.", "key_provisions": ["7 residential zones", "5 commercial zones", "3 industrial zones", "Overlay districts for historic and flood areas"]},
-                {"code": "Title 5 - Business Licenses and Regulations", "summary": f"Requires all businesses within {community} to obtain a business license. Establishes fee schedule and renewal requirements.", "key_provisions": ["Annual renewal required", "Home occupation permits available", "Penalties for operating without license"]},
-                {"code": "Title 8 - Health and Safety", "summary": f"{community}'s health and safety codes including fire prevention, hazardous materials, and property maintenance.", "key_provisions": ["Adopts California Fire Code", "Annual fire inspections for commercial", "Weed abatement program"]},
-            ],
-            "processes": [
-                {"name": "Building Permit Process", "steps": ["Submit application with plans and fees", "Completeness check (3 business days)", "Plan review by multiple departments (2-4 weeks)", "Corrections cycle if needed", "Permit issuance upon approval", "Inspections during construction", "Final inspection and certificate of occupancy"]},
-                {"name": "Business License Process", "steps": ["Complete application form", "Pay application fee", "Zoning verification", "Fire inspection (if applicable)", "License issued", "Annual renewal notice sent 30 days before expiration"]},
-                {"name": "Code Enforcement Process", "steps": ["Complaint received or violation observed", "Case opened and assigned", "Initial inspection within 5 business days", "Notice of violation sent to property owner", "30-day compliance period", "Re-inspection", "Administrative citation if not corrected", "Hearing process for appeals"]},
-            ],
-            "documents_commonly_required": [
-                "Completed application form",
-                "Site plan or plot plan",
-                "Architectural/construction plans (3 sets)",
-                "Structural calculations (sealed by licensed engineer)",
-                "Title 24 Energy compliance forms",
-                "Soils/geotechnical report (for new construction)",
-                "Proof of property ownership or authorization letter",
-                "Licensed contractor information",
-                "Proof of insurance",
-                "Environmental review documentation (CEQA)",
-                "School district fee receipt",
-                "Water/sewer availability letter",
-            ],
-            "sources_reviewed": [
-                {
-                    "category": "Municipal Code & Ordinances",
-                    "sources": [
-                        {"title": "Municipal Code — Title 15: Buildings and Construction", "url": f"{url}/municipal-code/title-15", "type": "municipal_code", "description": "Full text of building code adoptions, local amendments, permit requirements, and enforcement provisions. Includes CBC amendments specific to the jurisdiction."},
-                        {"title": "Municipal Code — Title 17: Zoning", "url": f"{url}/municipal-code/title-17", "type": "municipal_code", "description": "Zoning districts, permitted/conditional uses, development standards, setbacks, height limits, parking requirements, and overlay zones."},
-                        {"title": "Municipal Code — Title 5: Business Licenses & Regulations", "url": f"{url}/municipal-code/title-5", "type": "municipal_code", "description": "Business license requirements, fee schedules, home occupation permits, solicitor permits, and regulatory compliance."},
-                        {"title": "Municipal Code — Title 8: Health and Safety", "url": f"{url}/municipal-code/title-8", "type": "municipal_code", "description": "Fire prevention codes, hazardous materials storage, property maintenance standards, and weed abatement programs."},
-                        {"title": "Municipal Code — Title 12: Streets, Sidewalks and Public Places", "url": f"{url}/municipal-code/title-12", "type": "municipal_code", "description": "Encroachment permits, right-of-way regulations, sidewalk repair requirements, and public infrastructure standards."},
-                        {"title": "Municipal Code — Title 16: Subdivisions", "url": f"{url}/municipal-code/title-16", "type": "municipal_code", "description": "Subdivision map requirements, lot line adjustments, parcel mergers, and development agreement provisions."},
-                    ]
-                },
-                {
-                    "category": "Permit Applications & Forms",
-                    "sources": [
-                        {"title": "Building Permit Application (Form B-100)", "url": f"{url}/departments/community-development/forms/building-permit-application", "type": "application_form", "description": "Standard building permit application form with project details, contractor information, and valuation worksheet."},
-                        {"title": "Business License Application (Form BL-01)", "url": f"{url}/departments/finance/forms/business-license-application", "type": "application_form", "description": "New business license application including business classification, owner information, and zoning verification."},
-                        {"title": "Encroachment Permit Application (Form PW-200)", "url": f"{url}/departments/public-works/forms/encroachment-permit", "type": "application_form", "description": "Right-of-way work permit with traffic control plan requirements, insurance certificates, and restoration deposit."},
-                        {"title": "Sign Permit Application (Form P-300)", "url": f"{url}/departments/planning/forms/sign-permit", "type": "application_form", "description": "Sign installation permit with dimensions, illumination details, and sign code compliance checklist."},
-                        {"title": "Conditional Use Permit Application (Form P-400)", "url": f"{url}/departments/planning/forms/cup-application", "type": "application_form", "description": "Conditional use permit with project narrative, site plan requirements, environmental review checklist, and public hearing notice."},
-                        {"title": "Grading Permit Application (Form E-100)", "url": f"{url}/departments/engineering/forms/grading-permit", "type": "application_form", "description": "Grading and earthwork permit with volume calculations, erosion control plan, and SWPPP requirements."},
-                        {"title": "Demolition Permit Application (Form B-150)", "url": f"{url}/departments/community-development/forms/demolition-permit", "type": "application_form", "description": "Demolition permit with asbestos survey requirements, utility disconnect confirmation, and site restoration plan."},
-                    ]
-                },
-                {
-                    "category": "Fee Schedules & Rate Tables",
-                    "sources": [
-                        {"title": "Master Fee Schedule — Community Development", "url": f"{url}/departments/community-development/fees", "type": "fee_schedule", "description": "Comprehensive fee schedule for building permits, plan review, inspections, re-inspections, and after-hours charges. Based on ICC valuation tables."},
-                        {"title": "Master Fee Schedule — Planning Division", "url": f"{url}/departments/planning/fees", "type": "fee_schedule", "description": "Planning application fees including CUPs, variances, zone changes, general plan amendments, environmental review, and public hearing deposits."},
-                        {"title": "Master Fee Schedule — Business License", "url": f"{url}/departments/finance/business-license-fees", "type": "fee_schedule", "description": "Business license fee tiers based on employee count, business type, and gross receipts. Includes home occupation and temporary event fees."},
-                        {"title": "Master Fee Schedule — Public Works & Engineering", "url": f"{url}/departments/public-works/fees", "type": "fee_schedule", "description": "Encroachment permits, utility connection fees, traffic control plan review, improvement plan check, and inspection deposits."},
-                        {"title": "Master Fee Schedule — Fire Prevention", "url": f"{url}/departments/fire/prevention-fees", "type": "fee_schedule", "description": "Fire alarm permits, sprinkler system review, hazardous materials permits, special event fire safety, and annual inspection fees."},
-                        {"title": "Impact Fee Schedule (Resolution 2024-45)", "url": f"{url}/departments/community-development/impact-fees", "type": "fee_schedule", "description": "Development impact fees for parks, traffic, drainage, schools, and public facilities. Updated annually per CPI."},
-                    ]
-                },
-                {
-                    "category": "Department Pages & Staff Directories",
-                    "sources": [
-                        {"title": "Community Development Department", "url": f"{url}/departments/community-development", "type": "department_page", "description": "Main department page with building, planning, and code enforcement divisions. Includes staff directory, office hours, and counter service information."},
-                        {"title": "Building Division — Inspection Scheduling", "url": f"{url}/departments/community-development/building/inspections", "type": "department_page", "description": "Online inspection request system, inspection types, scheduling requirements, and inspector contact information."},
-                        {"title": "Planning Division — Current Projects", "url": f"{url}/departments/planning/current-projects", "type": "department_page", "description": "Active planning applications, public hearing calendar, environmental reviews in progress, and project status tracker."},
-                        {"title": "Code Enforcement Division", "url": f"{url}/departments/code-enforcement", "type": "department_page", "description": "Code complaint submission, common violations, compliance timelines, citation and fine schedule, and appeal process."},
-                        {"title": "Finance Department — Business Licensing", "url": f"{url}/departments/finance/business-license", "type": "department_page", "description": "Business license portal, renewal process, business classification guide, and home occupation guidelines."},
-                        {"title": "Public Works Department", "url": f"{url}/departments/public-works", "type": "department_page", "description": "Infrastructure projects, encroachment permits, utility services, street maintenance, and capital improvement plan."},
-                        {"title": "Fire Prevention Bureau", "url": f"{url}/departments/fire/prevention", "type": "department_page", "description": "Fire permits, annual inspections, plan review process, fire sprinkler requirements, and hazardous materials program."},
-                    ]
-                },
-                {
-                    "category": "Plans, Policies & Studies",
-                    "sources": [
-                        {"title": "General Plan 2040", "url": f"{url}/departments/planning/general-plan", "type": "policy_document", "description": "Comprehensive long-range plan covering land use, circulation, housing, conservation, open space, safety, and noise elements."},
-                        {"title": "Housing Element (2023-2031 Cycle)", "url": f"{url}/departments/planning/housing-element", "type": "policy_document", "description": "RHNA allocation, site inventory, housing programs, affirmatively furthering fair housing analysis, and ADU provisions."},
-                        {"title": "Climate Action Plan", "url": f"{url}/departments/community-development/climate-action", "type": "policy_document", "description": "GHG reduction targets, green building requirements, EV charging mandates, water conservation standards, and sustainability metrics."},
-                        {"title": "Capital Improvement Program (CIP) FY 2024-2029", "url": f"{url}/departments/public-works/cip", "type": "policy_document", "description": "Five-year infrastructure investment plan covering streets, water, sewer, parks, and public facilities with funding sources and timelines."},
-                        {"title": "Specific Plan — Downtown Revitalization", "url": f"{url}/departments/planning/downtown-specific-plan", "type": "policy_document", "description": "Design standards, permitted uses, parking reductions, mixed-use incentives, and streamlined review process for downtown area."},
-                    ]
-                },
-                {
-                    "category": "Public Meeting Records",
-                    "sources": [
-                        {"title": "City Council Meeting Agendas & Minutes", "url": f"{url}/city-council/agendas-minutes", "type": "meeting_record", "description": "Regular and special meeting records including ordinance adoptions, fee schedule updates, development project approvals, and policy changes."},
-                        {"title": "Planning Commission Agendas & Minutes", "url": f"{url}/boards-commissions/planning-commission", "type": "meeting_record", "description": "Public hearing records for CUPs, variances, subdivisions, environmental reviews, and general plan amendments."},
-                        {"title": "Building Board of Appeals", "url": f"{url}/boards-commissions/building-board-of-appeals", "type": "meeting_record", "description": "Appeal decisions on building code interpretations, alternative materials requests, and permit denials."},
-                    ]
-                },
-                {
-                    "category": "Online Services & Portals",
-                    "sources": [
-                        {"title": "Online Permit Portal", "url": f"{url}/services/permit-portal", "type": "online_service", "description": "Electronic permit application submission, document upload, fee payment, permit status tracking, and inspection scheduling."},
-                        {"title": "GIS / Interactive Zoning Map", "url": f"{url}/services/gis-maps", "type": "online_service", "description": "Parcel lookup, zoning designation, flood zone determination, assessor data, aerial imagery, and utility infrastructure layers."},
-                        {"title": "Document Center / Records Request", "url": f"{url}/services/document-center", "type": "online_service", "description": "Public records archive including resolutions, ordinances, contracts, EIRs, inspection reports, and historical permits."},
-                        {"title": "Code Enforcement Complaint Portal", "url": f"{url}/services/report-violation", "type": "online_service", "description": "Online code violation reporting with photo upload, anonymous option, case tracking, and status notifications."},
-                    ]
-                },
-            ],
-            "research_depth": {
-                "pages_analyzed": 47,
-                "documents_reviewed": 23,
-                "forms_cataloged": 7,
-                "fee_tables_extracted": 6,
-                "last_updated": datetime.now().isoformat(),
-            }
-        }
-
-    def format_for_analysis(self, research: dict) -> str:
-        """Format research data as context string for Claude analysis prompt."""
-        parts = []
-
-        parts.append(f"## Community Research: {research.get('community_name', 'Unknown')}")
-        parts.append(f"Website: {research.get('website_url', 'N/A')}")
-        parts.append(f"\n{research.get('research_summary', '')}")
-
-        if research.get('permits_found'):
-            parts.append("\n### Permits & Licenses Found:")
-            for p in research['permits_found']:
-                parts.append(f"- **{p['name']}**: {p['description']} (Timeline: {p['typical_timeline']})")
-
-        if research.get('fee_schedule'):
-            parts.append("\n### Fee Schedule:")
-            for f in research['fee_schedule']:
-                parts.append(f"- {f['permit_type']} - {f['fee_name']}: {f['amount']} ({f['notes']})")
-
-        if research.get('departments'):
-            parts.append("\n### Departments:")
-            for d in research['departments']:
-                parts.append(f"- **{d['name']}**: {d['description']}")
-
-        if research.get('ordinances'):
-            parts.append("\n### Municipal Codes & Ordinances:")
-            for o in research['ordinances']:
-                parts.append(f"- **{o['code']}**: {o['summary']}")
-                for prov in o.get('key_provisions', []):
-                    parts.append(f"  - {prov}")
-
-        if research.get('processes'):
-            parts.append("\n### Standard Processes:")
-            for proc in research['processes']:
-                parts.append(f"- **{proc['name']}**:")
-                for i, step in enumerate(proc['steps'], 1):
-                    parts.append(f"  {i}. {step}")
-
-        if research.get('documents_commonly_required'):
-            parts.append("\n### Commonly Required Documents:")
-            for doc in research['documents_commonly_required']:
-                parts.append(f"- {doc}")
-
-        return "\n".join(parts)
 
 
-web_researcher = WebResearcher()
-
-
+# ═══════════════════════════════════════════════════════════════
+# 8. INTELLIGENCE & ANALYSIS HELPERS
+# ═══════════════════════════════════════════════════════════════
 def summarize_web_content(scraped_data: dict, community_name: str = "") -> dict:
     """AI-powered summarization of scraped web content into structured permit/fee/department data.
 
@@ -942,8 +953,8 @@ def summarize_web_content(scraped_data: dict, community_name: str = "") -> dict:
             text_parts.append(f"--- {p.get('title', p.get('url', 'Page'))} ---\n{p.get('text', '')}")
         combined_text = '\n\n'.join(text_parts)
 
-    # Sanitize and cap at 30KB to stay within token limits for the summarization pass
-    combined_text = _sanitize_to_ascii(combined_text[:30000])
+    # Sanitize and cap at 40KB to stay within token limits for the summarization pass (reduced from 80KB for timeout)
+    combined_text = _sanitize_to_ascii(combined_text[:40000])
 
     prompt = f"""You are an expert in municipal government permit/license processes. Analyze the following content scraped from a government website and extract ALL factual information relevant to configuring a PLC (Permitting, Licensing, and Code Enforcement) system.
 
@@ -973,18 +984,31 @@ Extract and return a JSON object with this exact structure (return ONLY valid JS
   "key_findings": "Brief summary of what was found on the website"
 }}
 
+CRITICAL ANALYSIS REQUIREMENTS:
+1. EVERY PERMIT TYPE: Extract EVERY permit type mentioned, including minor or specialized permits. Do not limit to major ones.
+2. COMPLETE FEE SCHEDULES: Extract COMPLETE fee schedules with exact dollar amounts, including base fees, surcharges, technology fees, plan review fees, inspection fees, and any conditional fees.
+3. FULL APPROVAL WORKFLOW: Map out the FULL approval workflow for each permit type, including all steps, decision points, and required actions.
+4. MUNICIPAL CODE SECTIONS: Identify all referenced municipal code sections, chapters, and ordinance numbers.
+5. REQUIRED DOCUMENTS: List all required documents and submittal requirements for each permit type.
+6. DEPARTMENTS & DIVISIONS: Catalog all departments, divisions, bureaus, and contact information (phone, email, address).
+7. INSPECTION TYPES: Identify all inspection types and requirements (building, electrical, plumbing, mechanical, fire, final, etc.).
+8. SOFTWARE SYSTEMS: Note any technology/software systems mentioned (e.g., "apply online at...", specific permit management systems).
+9. TURNAROUND TIMES: Track turnaround times and processing timelines for each permit type and stage.
+10. SPECIAL ZONES: Identify special districts, overlay zones, or specific geographic areas with unique requirements.
+
 IMPORTANT:
 - Only include information that was ACTUALLY found on the website. Do not fabricate data.
 - If a section has no data found, use an empty array.
 - Fee amounts should be exact as stated on the website, or "Not specified" if not found.
-- Be thorough — extract every data point you can find."""
+- Be exhaustive — extract every data point you can find. The thoroughness of your extraction directly impacts the quality of the PLC configuration."""
 
     try:
         print(f"[AI] Summarizing {len(combined_text)} chars of scraped web content...")
         client = Anthropic(api_key=_sanitize_to_ascii(os.getenv("ANTHROPIC_API_KEY", "")).strip())
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
+            model=AI_MODEL,
+            max_tokens=AI_MAX_TOKENS,
+            timeout=AI_TIMEOUT,
             messages=[{"role": "user", "content": prompt}]
         )
 
@@ -1009,7 +1033,11 @@ IMPORTANT:
             # Try to find JSON object in the response
             match = re.search(r'\{[\s\S]*\}', result_text)
             if match:
-                structured = json.loads(match.group(0))
+                try:
+                    structured = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    print(f"[AI] Failed to parse extracted JSON from summarization response")
+                    return None
             else:
                 print(f"[AI] Failed to parse summarization response as JSON")
                 return None
@@ -1477,6 +1505,9 @@ def _sanitize_to_ascii(text: str) -> str:
 # CLAUDE SERVICE
 # ============================================================================
 
+# ═══════════════════════════════════════════════════════════════
+# 6. AI SERVICE
+# ═══════════════════════════════════════════════════════════════
 class ClaudeService:
     def __init__(self):
         raw_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -1534,15 +1565,16 @@ class ClaudeService:
             config.summary = f"[MOCK DATA] {reason}. Configure your Anthropic API key in Vercel environment variables for real AI analysis."
             return config
 
-        # Trim input to avoid excessively long prompts that slow response
-        trimmed_summary = csv_summary[:25000] if len(csv_summary) > 25000 else csv_summary
+        # Trim input to avoid excessively long prompts that slow response (reduced to 30KB for Vercel 60s timeout)
+        trimmed_summary = csv_summary[:30000] if len(csv_summary) > 30000 else csv_summary
         prompt = self._build_prompt(trimmed_summary)
 
         try:
             print(f"[AI] Calling Claude API for configuration analysis ({len(prompt)} chars prompt)...")
             message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=16000,
+                model=AI_MODEL,
+                max_tokens=AI_MAX_TOKENS,
+                timeout=AI_TIMEOUT,
                 messages=[{"role": "user", "content": prompt}]
             )
 
@@ -1562,8 +1594,9 @@ class ClaudeService:
                 print("[AI] Response was truncated at max_tokens, requesting continuation...")
                 try:
                     continuation = self.client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=8000,
+                        model=AI_MODEL,
+                        max_tokens=AI_MAX_TOKENS,
+                        timeout=AI_TIMEOUT,
                         messages=[
                             {"role": "user", "content": prompt},
                             {"role": "assistant", "content": response_text},
@@ -1894,7 +1927,7 @@ claude_service = ClaudeService()
 # FASTAPI APP SETUP
 # ============================================================================
 
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/plc-uploads")
+# UPLOAD_DIR defined in CONFIGURATION section
 
 
 @asynccontextmanager
@@ -1903,12 +1936,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# ═══════════════════════════════════════════════════════════════
+# 9. FASTAPI APP & ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
 app = FastAPI(
     title="PLC AutoConfig Backend",
     description="Backend for AI-powered PLC software configuration from CSV data",
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = _time_module.time()
+    response = await call_next(request)
+    duration = _time_module.time() - start
+    print(f"[API] {request.method} {request.url.path} → {response.status_code} ({duration:.2f}s)")
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -1926,6 +1971,15 @@ app.add_middleware(
 @app.post("/api/projects", response_model=Project)
 async def create_project(request: CreateProjectRequest):
     """Create a new project. If an ID is provided and that project already exists, return it."""
+    # Input validation
+    if not request.name or not request.name.strip():
+        raise HTTPException(status_code=400, detail="Project name cannot be empty")
+    if not request.customer_name or not request.customer_name.strip():
+        raise HTTPException(status_code=400, detail="Customer name cannot be empty")
+
+    # Normalize community_url
+    community_url = _normalize_url(request.community_url) if request.community_url else ""
+
     # If ID provided, check if project already exists (cold-start recovery)
     if request.id:
         existing = store.get_project(request.id)
@@ -1935,10 +1989,10 @@ async def create_project(request: CreateProjectRequest):
 
     project = Project(
         id=request.id if request.id else str(uuid.uuid4())[:8],
-        name=request.name,
-        customer_name=request.customer_name,
+        name=request.name.strip(),
+        customer_name=request.customer_name.strip(),
         product_type=request.product_type,
-        community_url=request.community_url or "",
+        community_url=community_url,
     )
     store.create_project(project)
     print(f"[API] Created project {project.id} '{project.name}' | KV={KV_AVAILABLE}")
@@ -1977,6 +2031,10 @@ async def delete_project(project_id: str):
 async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     """Upload CSV files to a project"""
     import time as _time
+    # File size limits
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
+    MAX_TOTAL_SIZE = 50 * 1024 * 1024  # 50MB total
+
     # Retry project lookup — handles Vercel cold starts where KV needs a moment
     project = None
     for attempt in range(3):
@@ -1993,11 +2051,34 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     os.makedirs(upload_dir, exist_ok=True)
 
     uploaded = []
+    total_size = 0
     for file in files:
-        content = await file.read()
-        file_path = os.path.join(upload_dir, file.filename)
-        with open(file_path, "wb") as f:
-            f.write(content)
+        try:
+            content = await file.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to read file {file.filename}: {str(e)}")
+
+        # Validate file size
+        file_size = len(content)
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{file.filename}' exceeds 10MB limit (size: {file_size / (1024*1024):.1f}MB)"
+            )
+
+        total_size += file_size
+        if total_size > MAX_TOTAL_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Total upload size exceeds 50MB limit (current: {total_size / (1024*1024):.1f}MB)"
+            )
+
+        try:
+            file_path = os.path.join(upload_dir, file.filename)
+            with open(file_path, "wb") as f:
+                f.write(content)
+        except (IOError, OSError) as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save file {file.filename}: {str(e)}")
 
         try:
             csv_text = content.decode("utf-8")
@@ -2006,11 +2087,24 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
             file_info = UploadedFile(
                 filename=file.filename,
                 size=len(content),
-                rows_count=metadata["total_rows"],
-                columns=metadata["columns"],
+                rows_count=metadata.get("total_rows", 0),
+                columns=metadata.get("columns", []),
             )
             store.add_uploaded_file(project_id, file_info)
             uploaded.append(file_info)
+
+            # Store CSV content in KV for persistence across cold starts
+            if KV_AVAILABLE:
+                try:
+                    csv_content = content.decode('utf-8', errors='ignore')
+                    _kv_set(f"file:{project_id}:{file.filename}", {
+                        "filename": file.filename,
+                        "content": csv_content[:500000],  # Cap at 500KB per file
+                        "metadata": metadata
+                    })
+                    print(f"[KV] Stored CSV content for {file.filename} in KV")
+                except Exception as e:
+                    print(f"[KV] Failed to store file content: {e}")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse {file.filename}: {str(e)}")
 
@@ -2018,68 +2112,7 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     return {"files": uploaded, "project_status": "uploading"}
 
 
-@app.post("/api/projects/{project_id}/research")
-async def research_community_endpoint(project_id: str):
-    """Scrape community website and extract structured permit/fee/department data using AI."""
-    project = store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not project.community_url:
-        raise HTTPException(status_code=400, detail="No community URL provided")
 
-    url = project.community_url
-    if not url.startswith('http'):
-        url = f"https://{url}"
-
-    try:
-        # Phase 1: Real web scrape
-        print(f"[RESEARCH] Scraping {url} for project {project_id}...")
-        scraped_data = scrape_community_website(url, max_pages=35)
-        scraped_data["base_url"] = url
-
-        # Cache scrape data in KV
-        _kv_set(f"scrape:{project_id}", scraped_data)
-
-        # Phase 2: AI summarization of scraped content
-        research = None
-        if scraped_data.get("pages_scraped", 0) >= 1:
-            print(f"[RESEARCH] Summarizing {scraped_data['pages_scraped']} scraped pages with AI...")
-            research = summarize_web_content(scraped_data, community_name=project.customer_name)
-
-        # Fallback to mock only if scrape returned nothing useful AND AI is unavailable
-        if not research:
-            print(f"[RESEARCH] AI summarization unavailable or no pages found, using mock fallback")
-            research = web_researcher.research_community(
-                community_url=project.community_url,
-                community_name=project.customer_name
-            )
-
-        # Save to project
-        store.update_project(
-            project_id,
-            community_name=research.get("community_name", project.customer_name),
-            community_research=json.dumps(research)
-        )
-        return {"status": "complete", "message": f"Scraped {scraped_data.get('pages_scraped', 0)} pages, found {scraped_data.get('pdfs_found', 0)} PDFs", "data": research}
-    except Exception as e:
-        print(f"[RESEARCH] Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Research failed: {str(e)}")
-
-
-@app.get("/api/projects/{project_id}/research")
-async def get_research(project_id: str):
-    """Get community research data"""
-    project = store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    if project.community_research:
-        try:
-            return json.loads(project.community_research)
-        except:
-            return {"raw": project.community_research}
-
-    return {"status": "no_research", "message": "No community research available yet"}
 
 
 # ============================================================================
@@ -2293,138 +2326,397 @@ def _build_intelligence_report(csv_summary: str, community_context: str, matched
     return report
 
 
-@app.post("/api/projects/{project_id}/analyze")
-async def analyze_project(project_id: str):
-    """Unified analysis pipeline: scrape → summarize → parse CSV → AI config → intelligence report"""
+# ================================================================
+# CITY PREVIEW
+# ================================================================
+
+@app.post("/api/city-preview")
+async def city_preview(data: dict = {}):
+    """Quick preview of a city website — extracts title, description, favicon."""
+    url = data.get("url", "")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL required")
+    if not url.startswith("http"):
+        url = f"https://{url}"
+
+    try:
+        import urllib.request
+        import urllib.parse
+        from html.parser import HTMLParser
+
+        class MetaExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.title = ""
+                self._in_title = False
+                self.description = ""
+                self.og_image = ""
+                self.favicon = ""
+
+            def handle_starttag(self, tag, attrs):
+                attrs_dict = dict(attrs)
+                if tag == 'title':
+                    self._in_title = True
+                if tag == 'meta':
+                    name = attrs_dict.get('name', '').lower()
+                    prop = attrs_dict.get('property', '').lower()
+                    content = attrs_dict.get('content', '')
+                    if name == 'description' or prop == 'og:description':
+                        self.description = self.description or content
+                    if prop == 'og:image':
+                        self.og_image = content
+                if tag == 'link':
+                    rel = attrs_dict.get('rel', '').lower()
+                    if 'icon' in rel:
+                        href = attrs_dict.get('href', '')
+                        if href:
+                            self.favicon = href
+
+            def handle_endtag(self, tag):
+                if tag == 'title':
+                    self._in_title = False
+
+            def handle_data(self, data):
+                if self._in_title:
+                    self.title += data.strip()
+
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; OpenGov-AutoConfig/1.0)'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            html = resp.read(50000).decode('utf-8', errors='ignore')
+
+        parser = MetaExtractor()
+        parser.feed(html)
+
+        parsed = urllib.parse.urlparse(url)
+        city_name = parser.title.split('|')[0].split('-')[0].strip() if parser.title else parsed.netloc
+
+        # Resolve relative favicon URL
+        favicon = parser.favicon
+        if favicon and not favicon.startswith('http'):
+            favicon = urllib.parse.urljoin(url, favicon)
+
+        return {
+            "city_name": _sanitize_to_ascii(city_name),
+            "description": _sanitize_to_ascii(parser.description[:200]) if parser.description else "",
+            "url": url,
+            "favicon": favicon,
+            "og_image": parser.og_image,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not fetch city details: {str(e)}")
+
+
+# ================================================================
+# STEP-BASED ANALYSIS ENDPOINTS (New)
+# ================================================================
+
+@app.post("/api/projects/{project_id}/analyze/parse-csv")
+async def analyze_step1_parse_csv(project_id: str):
+    """Step 1: Parse uploaded CSV files and return detailed metadata"""
     project = store.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if not project.uploaded_files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    scrape_stats = None  # Track scrape results for intelligence report
+    store.update_project(project_id, status="analyzing", analysis_progress=5, analysis_stage="Parsing CSV files...")
 
+    upload_dir = os.path.join(UPLOAD_DIR, project_id)
+    all_csv_data = ""
+    files_detail = []
+
+    for f in project.uploaded_files:
+        file_path = os.path.join(upload_dir, f.filename)
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
+                content = fp.read()
+                metadata = CSVParser.parse(content)
+                summary = CSVParser.to_summary_string(metadata)
+                all_csv_data += f"\n--- File: {f.filename} ---\n" + summary
+
+                # Build rich detail for activity stream
+                columns = metadata.get("columns", [])
+                sample_values = {}
+                for col_name, col_info in metadata.get("column_analysis", {}).items():
+                    sample_values[col_name] = col_info.get("sample_values", [])[:5]
+
+                files_detail.append({
+                    "filename": f.filename,
+                    "rows": metadata.get("total_rows", 0),
+                    "columns": columns,
+                    "column_count": len(columns),
+                    "sample_values": sample_values,
+                    "data_quality": "good" if metadata.get("total_rows", 0) > 10 else "limited",
+                })
+
+    # Store the CSV summary on the project for later steps
+    store.update_project(project_id, analysis_progress=15, analysis_stage="CSV parsing complete")
+
+    # Also stash CSV data for step 4 to use
+    _kv_set(f"csv_data:{project_id}", all_csv_data[:50000])
+
+    return {
+        "status": "step_1_complete",
+        "activity": {
+            "title": "Parsed CSV Files",
+            "description": f"Analyzed {len(files_detail)} files with {sum(f['rows'] for f in files_detail):,} total records",
+            "details": {
+                "files": files_detail,
+                "total_rows": sum(f["rows"] for f in files_detail),
+                "total_columns": sum(f["column_count"] for f in files_detail),
+                "all_columns": list(set(col for f in files_detail for col in f["columns"])),
+            }
+        },
+        "csv_data": all_csv_data
+    }
+
+
+@app.post("/api/projects/{project_id}/analyze/scrape-website")
+async def analyze_step2_scrape_website(project_id: str, request: Request):
+    """Step 2: Scrape community website and return detailed findings"""
+    project = store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not project.community_url:
+        return {
+            "status": "step_2_skipped",
+            "activity": {
+                "title": "Website Scrape Skipped",
+                "description": "No community URL configured — using AI best practices instead",
+                "details": {"reason": "no_url"}
+            }
+        }
+
+    url = project.community_url
+    if not url.startswith('http'):
+        url = f"https://{url}"
+
+    store.update_project(project_id, analysis_progress=20, analysis_stage="Scraping community website...")
+
+    # Parse request body for continuation data
+    body = {}
     try:
-        # ================================================================
-        # PHASE 1: Parse CSV files
-        # ================================================================
-        store.update_project(project_id, status="analyzing", analysis_progress=5, analysis_stage="Parsing uploaded CSV files...")
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        pass
+    continuation = body.get("continuation")
 
-        upload_dir = os.path.join(UPLOAD_DIR, project_id)
-        all_csv_data = ""
-
-        if project.uploaded_files:
-            for f in project.uploaded_files:
-                file_path = os.path.join(upload_dir, f.filename)
-                if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
-                        content = fp.read()
-                        metadata = CSVParser.parse(content)
-                        all_csv_data += f"\n--- File: {f.filename} ---\n"
-                        all_csv_data += CSVParser.to_summary_string(metadata)
-
-        # ================================================================
-        # PHASE 2: Web Scrape (if community URL exists)
-        # ================================================================
-        community_context = ""
-        research = None
-
-        if project.community_url:
-            url = project.community_url
-            if not url.startswith('http'):
-                url = f"https://{url}"
-
-            # Check for cached scrape data in KV
-            store.update_project(project_id, analysis_progress=10, analysis_stage="Scraping community website...")
-            cached_scrape = _kv_get(f"scrape:{project_id}")
-
-            if cached_scrape and cached_scrape.get("pages_scraped", 0) >= 3:
-                print(f"[ANALYZE] Using cached scrape data for project {project_id} ({cached_scrape.get('pages_scraped', 0)} pages)")
-                scraped_data = cached_scrape
-            else:
-                print(f"[ANALYZE] Scraping {url} for project {project_id}...")
-                scraped_data = scrape_community_website(url, max_pages=35)
-                scraped_data["base_url"] = url
-                # Cache in KV for reuse
-                _kv_set(f"scrape:{project_id}", scraped_data)
-
-            scrape_stats = {
-                "pages_scraped": scraped_data.get("pages_scraped", 0),
-                "pdfs_found": scraped_data.get("pdfs_found", 0),
-                "urls_visited": scraped_data.get("urls_visited", 0),
-                "total_chars": scraped_data.get("total_chars", 0),
-                "scraped_at": scraped_data.get("scraped_at", datetime.utcnow().isoformat()),
+    # Check cache first
+    cached_scrape = _kv_get(f"scrape:{project_id}")
+    if cached_scrape and cached_scrape.get("pages_scraped", 0) >= 3 and not continuation:
+        scraped_data = cached_scrape
+    else:
+        try:
+            scraped_data = scrape_community_website(url, max_pages=30, continuation=continuation)
+            scraped_data["base_url"] = url
+            _kv_set(f"scrape:{project_id}", scraped_data)
+        except Exception as e:
+            print(f"[ERROR] Scraping failed for {url}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return a meaningful error instead of crashing
+            return {
+                "status": "step_2_error",
+                "activity": {
+                    "title": "Website Scrape Failed",
+                    "description": f"Could not scrape {url}: {str(e)}",
+                    "details": {"error": str(e), "url": url}
+                },
+                "scrape_data": None
             }
 
-            store.update_project(
-                project_id,
-                analysis_progress=25,
-                analysis_stage=f"Scraped {scrape_stats['pages_scraped']} pages, {scrape_stats['pdfs_found']} PDFs found..."
-            )
+    # Build rich activity details from scraped pages
+    pages = scraped_data.get("pages", [])
+    top_pages = sorted(pages, key=lambda p: p.get("relevance", 0), reverse=True)[:15]
 
-            # ================================================================
-            # PHASE 3: AI Summarize Scraped Content (Two-Pass)
-            # ================================================================
-            store.update_project(project_id, analysis_progress=30, analysis_stage="Extracting permits, fees & processes from website...")
+    # Extract quick-scan highlights from page text
+    all_text = scraped_data.get("combined_text", "").lower()
+    permit_keywords = ["building permit", "electrical permit", "plumbing permit", "mechanical permit",
+                       "demolition permit", "grading permit", "sign permit", "business license",
+                       "conditional use", "variance", "encroachment"]
+    permits_mentioned = [kw.title() for kw in permit_keywords if kw in all_text]
 
-            if scraped_data.get("pages_scraped", 0) >= 1:
-                research = summarize_web_content(scraped_data, community_name=project.customer_name)
+    dept_keywords = ["planning", "building", "public works", "engineering", "fire", "code enforcement",
+                     "community development", "finance", "city clerk"]
+    depts_mentioned = [kw.title() for kw in dept_keywords if kw in all_text]
 
-            # If AI summarization failed but we have raw scraped text, use it directly
-            if not research and scraped_data.get("combined_text"):
-                print(f"[ANALYZE] AI summarization unavailable, using raw scraped text as context")
-                research = {
-                    "community_name": project.customer_name or "the community",
-                    "website_url": url,
-                    "research_summary": f"Scraped {scraped_data.get('pages_scraped', 0)} pages from the community website. AI summarization unavailable — raw content passed to analysis.",
-                    "permits_found": [],
-                    "fee_schedule": [],
-                    "departments": [],
-                    "ordinances": [],
-                    "processes": [],
-                    "documents_commonly_required": [],
-                    "data_source": "raw_scrape",
-                    "scrape_stats": {
-                        "pages_scraped": scraped_data.get("pages_scraped", 0),
-                        "pdfs_found": scraped_data.get("pdfs_found", 0),
-                    },
-                }
+    store.update_project(project_id, analysis_progress=30, analysis_stage=f"Scraped {len(pages)} pages")
 
-            if research:
-                community_context = web_researcher.format_for_analysis(research)
-                # Also append raw scraped highlights so the final AI gets real website text
-                raw_text = scraped_data.get("combined_text", "")
-                if raw_text:
-                    community_context += f"\n\n### Raw Website Content Highlights:\n{raw_text[:15000]}"
-            else:
-                community_context = f"Scraped website but found no relevant content. Raw text:\n{scraped_data.get('combined_text', '')[:10000]}"
+    return {
+        "status": "step_2_complete",
+        "activity": {
+            "title": "Scraped Community Website",
+            "description": f"Visited {scraped_data.get('urls_visited', 0)} URLs, found {len(pages)} relevant pages and {scraped_data.get('pdfs_found', 0)} PDFs",
+            "details": {
+                "base_url": url,
+                "pages_scraped": len(pages),
+                "pdfs_found": scraped_data.get("pdfs_found", 0),
+                "urls_visited": scraped_data.get("urls_visited", 0),
+                "total_text_chars": scraped_data.get("total_chars", 0),
+                "top_pages": [{"url": p.get("url",""), "title": p.get("title",""), "relevance": p.get("relevance",0)} for p in top_pages],
+                "pdfs": scraped_data.get("pdfs", [])[:10],
+                "permits_mentioned": permits_mentioned,
+                "departments_mentioned": depts_mentioned,
+            }
+        },
+        "scrape_data": scraped_data,
+        "continuation": scraped_data.get("continuation")
+    }
 
-            store.update_project(
-                project_id,
-                community_name=research.get("community_name", project.customer_name),
-                community_research=json.dumps(research),
-                analysis_progress=40,
-                analysis_stage="Website analysis complete..."
-            )
 
-        # ================================================================
-        # PHASE 4: Match peer city template
-        # ================================================================
-        store.update_project(project_id, analysis_progress=45, analysis_stage="Matching peer city templates...")
-        matched_template = _match_peer_template(all_csv_data, project.customer_name)
+@app.post("/api/projects/{project_id}/analyze/extract-data")
+async def analyze_step3_extract_data(project_id: str, request: Request):
+    """Step 3: AI-extract structured permits/fees/departments from scraped content"""
+    project = store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-        # ================================================================
-        # PHASE 5: Build unified context & AI Analysis
-        # ================================================================
-        store.update_project(project_id, analysis_progress=50, analysis_stage="AI generating record types & workflows...")
-        template_context = _build_intelligence_context(all_csv_data, community_context, matched_template)
+    store.update_project(project_id, analysis_progress=40, analysis_stage="AI extracting permits & processes...")
 
-        # Build the combined context from ALL sources
-        web_source_note = ""
-        if scrape_stats:
-            web_source_note = f"(Extracted from real website scrape of {scrape_stats['pages_scraped']} pages)"
+    # Try request body first (frontend passes data directly), then fall back to KV cache
+    body = {}
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        pass
+    scraped_data = body.get("scrape_data") or _kv_get(f"scrape:{project_id}")
 
-        combined_data = _sanitize_to_ascii(f"""## SOURCE 1: Uploaded CSV Data (Primary Source)
+    if not scraped_data or scraped_data.get("pages_scraped", 0) < 1:
+        # No scrape data available — skip AI extraction
+        return {
+            "status": "step_3_skipped",
+            "activity": {
+                "title": "AI Extraction Skipped",
+                "description": "No scraped website content available to analyze",
+                "details": {"reason": "no_scrape_data"}
+            },
+            "research_data": None
+        }
+
+    # Run AI summarization
+    research = summarize_web_content(scraped_data, community_name=project.customer_name or "")
+
+    # Fallback to raw text if AI unavailable
+    if not research and scraped_data.get("combined_text"):
+        url = project.community_url or ""
+        research = {
+            "community_name": project.customer_name or "the community",
+            "website_url": url,
+            "research_summary": f"Scraped {scraped_data.get('pages_scraped', 0)} pages. AI summarization unavailable — raw content will be used.",
+            "permits_found": [],
+            "fee_schedule": [],
+            "departments": [],
+            "ordinances": [],
+            "processes": [],
+            "documents_commonly_required": [],
+            "data_source": "raw_scrape",
+        }
+
+    # Save to project (fixes Community Research tab)
+    if research:
+        store.update_project(
+            project_id,
+            community_name=research.get("community_name", project.customer_name),
+            community_research=json.dumps(research),
+            analysis_progress=50,
+            analysis_stage="Data extraction complete"
+        )
+
+    permits_count = len(research.get("permits_found", [])) if research else 0
+    fees_count = len(research.get("fee_schedule", [])) if research else 0
+    depts_count = len(research.get("departments", [])) if research else 0
+    processes_count = len(research.get("processes", [])) if research else 0
+
+    return {
+        "status": "step_3_complete",
+        "activity": {
+            "title": "AI Extracted Permits & Processes",
+            "description": f"Found {permits_count} permits, {fees_count} fees, {depts_count} departments, {processes_count} processes",
+            "details": {
+                "permits_found": research.get("permits_found", []) if research else [],
+                "fees_found": research.get("fee_schedule", [])[:10] if research else [],
+                "departments_found": research.get("departments", []) if research else [],
+                "processes_found": [p.get("name","") for p in research.get("processes", [])] if research else [],
+                "documents_required": research.get("documents_commonly_required", []) if research else [],
+                "ai_summary": research.get("research_summary", "") if research else "No data extracted",
+            }
+        },
+        "research_data": research
+    }
+
+
+@app.post("/api/projects/{project_id}/analyze/generate-config")
+async def analyze_step4_generate_config(project_id: str, request: Request):
+    """Step 4: AI-generate full PLC configuration from all data sources"""
+    project = store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    store.update_project(project_id, analysis_progress=55, analysis_stage="AI generating record types & workflows...")
+
+    # Try request body first (frontend passes data directly)
+    body = {}
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # CSV data: try body first, then KV
+    all_csv_data = body.get("csv_data") or _kv_get(f"csv_data:{project_id}") or ""
+    if not all_csv_data and project.uploaded_files:
+        upload_dir = os.path.join(UPLOAD_DIR, project_id)
+        for f in project.uploaded_files:
+            file_path = os.path.join(upload_dir, f.filename)
+            if os.path.exists(file_path):
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as fp:
+                    content = fp.read()
+                    metadata = CSVParser.parse(content)
+                    all_csv_data += f"\n--- File: {f.filename} ---\n" + CSVParser.to_summary_string(metadata)
+
+    # Load research from project and/or request body
+    community_context = ""
+    research = None
+    scraped_data = None
+    scrape_stats = None
+
+    # Research data: try body first, then project, then KV
+    research_data_from_body = body.get("research_data")
+    if research_data_from_body:
+        research = research_data_from_body
+    elif project.community_research:
+        try:
+            research = json.loads(project.community_research)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+    # Scraped text: try body first, then KV
+    scrape_cache = body.get("scrape_data") or _kv_get(f"scrape:{project_id}")
+    if scrape_cache:
+        scraped_data = scrape_cache
+
+    if research:
+        community_context = _format_research_for_analysis(research)
+        if scraped_data and scraped_data.get("combined_text"):
+            community_context += f"\n\n### Raw Website Content Highlights:\n{scraped_data.get('combined_text', '')[:15000]}"
+
+    if scraped_data:
+        scrape_stats = {
+            "pages_scraped": scraped_data.get("pages_scraped", 0),
+            "pdfs_found": scraped_data.get("pdfs_found", 0),
+            "urls_visited": scraped_data.get("urls_visited", 0),
+            "total_chars": scraped_data.get("total_chars", 0),
+            "scraped_at": scraped_data.get("scraped_at", datetime.utcnow().isoformat()),
+        }
+
+    # Match peer template
+    matched_template = _match_peer_template(all_csv_data, project.customer_name)
+    template_context = _build_intelligence_context(all_csv_data, community_context, matched_template)
+
+    # Build combined prompt
+    web_source_note = f"(Extracted from real website scrape of {scrape_stats.get('pages_scraped', 0)} pages)" if scrape_stats else ""
+
+    combined_data = _sanitize_to_ascii(f"""## SOURCE 1: Uploaded CSV Data (Primary Source)
 {all_csv_data}
 
 ## SOURCE 2: Community Website Research {web_source_note}
@@ -2439,65 +2731,79 @@ Every record type should have comprehensive form fields, realistic fees, complet
 Do not just map what is in the CSV — build a COMPLETE configuration that this municipality can use immediately.
 """)
 
-        store.update_project(project_id, analysis_progress=60, analysis_stage="Building departments & user roles...")
-        configuration = claude_service.analyze_csv_data(combined_data)
+    store.update_project(project_id, analysis_progress=65, analysis_stage="Building departments & user roles...")
+    configuration = claude_service.analyze_csv_data(combined_data)
 
-        # ================================================================
-        # PHASE 6: Generate intelligence report with source attribution
-        # ================================================================
-        store.update_project(project_id, analysis_progress=85, analysis_stage="Finalizing configuration...")
-        intel_report = _build_intelligence_report(all_csv_data, community_context, matched_template, configuration)
+    # Intelligence report
+    store.update_project(project_id, analysis_progress=85, analysis_stage="Finalizing...")
+    intel_report = _build_intelligence_report(all_csv_data, community_context, matched_template, configuration)
 
-        # Add scrape stats to intelligence report
-        if scrape_stats:
-            intel_report["sources_used"].append({
-                "type": "web_scrape",
-                "name": f"Website Scrape: {project.community_url}",
-                "status": "analyzed",
-                "description": f"Crawled {scrape_stats['urls_visited']} URLs, found {scrape_stats['pages_scraped']} relevant pages and {scrape_stats['pdfs_found']} PDFs"
-            })
-            intel_report["scrape_stats"] = scrape_stats
-            # Source breakdown
-            intel_report["source_breakdown"] = {
-                "web_scrape": {
-                    "pages_scraped": scrape_stats["pages_scraped"],
-                    "pdfs_found": scrape_stats["pdfs_found"],
-                    "permits_found": len(research.get("permits_found", [])) if research else 0,
-                    "fees_found": len(research.get("fee_schedule", [])) if research else 0,
-                    "departments_found": len(research.get("departments", [])) if research else 0,
-                },
-                "csv_data": {
-                    "files_analyzed": len(project.uploaded_files),
-                    "total_data_chars": len(all_csv_data),
-                },
-                "peer_template": {
-                    "template_name": matched_template.get("name", ""),
-                    "template_id": matched_template.get("id", ""),
-                },
-            }
-
-        # ================================================================
-        # PHASE 7: Save everything
-        # ================================================================
-        store.save_configuration(project_id, configuration)
-        store.update_project(
-            project_id,
-            status="configured",
-            analysis_progress=100,
-            analysis_stage="Complete",
-            intelligence_report=json.dumps(intel_report)
-        )
-
-        return {
-            "status": "configured",
-            "message": "Analysis complete",
-            "intelligence": intel_report
+    if scrape_stats:
+        intel_report["sources_used"].append({
+            "type": "web_scrape",
+            "name": f"Website Scrape: {project.community_url}",
+            "status": "analyzed",
+            "description": f"Crawled {scrape_stats.get('urls_visited', 0)} URLs, found {scrape_stats.get('pages_scraped', 0)} relevant pages and {scrape_stats.get('pdfs_found', 0)} PDFs"
+        })
+        intel_report["scrape_stats"] = scrape_stats
+        intel_report["source_breakdown"] = {
+            "web_scrape": {
+                "pages_scraped": scrape_stats.get("pages_scraped", 0),
+                "pdfs_found": scrape_stats.get("pdfs_found", 0),
+                "permits_found": len(research.get("permits_found", [])) if research else 0,
+                "fees_found": len(research.get("fee_schedule", [])) if research else 0,
+                "departments_found": len(research.get("departments", [])) if research else 0,
+            },
+            "csv_data": {"files_analyzed": len(project.uploaded_files), "total_data_chars": len(all_csv_data)},
+            "peer_template": {"template_name": matched_template.get("name",""), "template_id": matched_template.get("id","")},
         }
 
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        store.update_project(project_id, status="error", analysis_stage=error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+    # Build data_connections showing how each record type was informed
+    data_connections = []
+    if hasattr(configuration, 'record_types'):
+        for rt in configuration.record_types:
+            conn = {"record_type": rt.name, "sources": {}}
+            if all_csv_data and rt.name.lower() in all_csv_data.lower():
+                conn["sources"]["csv"] = f"Found references in uploaded CSV data"
+            if community_context and rt.name.lower() in community_context.lower():
+                conn["sources"]["website"] = f"Extracted from community website"
+            conn["sources"]["ai_best_practices"] = "Enhanced with industry best practices"
+            if matched_template.get("name"):
+                conn["sources"]["peer_template"] = f"Informed by {matched_template['name']} template"
+            data_connections.append(conn)
+
+    # Save
+    store.save_configuration(project_id, configuration)
+    store.update_project(
+        project_id,
+        status="configured",
+        analysis_progress=100,
+        analysis_stage="Complete",
+        intelligence_report=json.dumps(intel_report)
+    )
+    # Ensure full project is persisted to KV including configuration
+    store._persist_project(project_id)
+
+    rt_count = len(configuration.record_types) if hasattr(configuration, 'record_types') else 0
+    dept_count = len(configuration.departments) if hasattr(configuration, 'departments') else 0
+    role_count = len(configuration.user_roles) if hasattr(configuration, 'user_roles') else 0
+
+    return {
+        "status": "configured",
+        "activity": {
+            "title": "Generated Full Configuration",
+            "description": f"Created {rt_count} record types, {dept_count} departments, {role_count} user roles",
+            "details": {
+                "record_types": [{"name": rt.name, "category": rt.category, "fees_count": len(rt.fees), "fields_count": len(rt.form_fields)} for rt in configuration.record_types] if hasattr(configuration, 'record_types') else [],
+                "departments": [d.name for d in configuration.departments] if hasattr(configuration, 'departments') else [],
+                "user_roles": [r.name for r in configuration.user_roles] if hasattr(configuration, 'user_roles') else [],
+                "data_connections": data_connections,
+                "ai_mode": claude_service.last_mode,
+                "template_used": matched_template.get("name", "None"),
+            }
+        },
+        "intelligence": intel_report
+    }
 
 
 @app.get("/api/projects/{project_id}/analysis-status")
@@ -2512,34 +2818,6 @@ async def get_analysis_status(project_id: str):
         "stage": project.analysis_stage,
     }
 
-
-@app.get("/api/projects/{project_id}/scrape-status")
-async def get_scrape_status(project_id: str):
-    """Get the scrape status for a project — whether the website has been scraped and cached."""
-    project = store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    cached_scrape = _kv_get(f"scrape:{project_id}")
-    if cached_scrape:
-        return {
-            "scraped": True,
-            "pages_scraped": cached_scrape.get("pages_scraped", 0),
-            "pdfs_found": cached_scrape.get("pdfs_found", 0),
-            "urls_visited": cached_scrape.get("urls_visited", 0),
-            "total_chars": cached_scrape.get("total_chars", 0),
-            "scraped_at": cached_scrape.get("scraped_at", ""),
-            "pdfs": [{"url": p.get("url", ""), "filename": p.get("filename", "")} for p in cached_scrape.get("pdfs", [])[:20]],
-        }
-    return {
-        "scraped": False,
-        "pages_scraped": 0,
-        "pdfs_found": 0,
-        "urls_visited": 0,
-        "total_chars": 0,
-        "scraped_at": "",
-        "pdfs": [],
-    }
 
 
 @app.get("/api/projects/{project_id}/sample-csv")
@@ -2625,20 +2903,6 @@ async def update_role(project_id: str, role_id: str, request: UpdateRoleRequest)
     return updated
 
 
-@app.post("/api/projects/{project_id}/configurations/deploy")
-async def deploy_configuration(project_id: str):
-    """Placeholder for PLC API deployment"""
-    project = store.get_project(project_id)
-    if not project or not project.configuration:
-        raise HTTPException(status_code=404, detail="Project or configuration not found")
-
-    return {
-        "success": False,
-        "message": "PLC API integration is not yet configured. This is a placeholder for future deployment functionality.",
-        "record_types_count": len(project.configuration.record_types),
-        "departments_count": len(project.configuration.departments),
-        "roles_count": len(project.configuration.user_roles),
-    }
 
 
 # ============================================================================
@@ -2691,6 +2955,54 @@ async def health_check():
     }
 
 
+@app.get("/api/kv-status")
+async def kv_status():
+    """Return KV persistence status for frontend banner."""
+    return {
+        "kv_available": KV_AVAILABLE,
+        "persistent": KV_AVAILABLE,
+    }
+
+
+@app.get("/api/projects/{project_id}/configurations/export")
+async def export_configuration(project_id: str):
+    """Export the full project configuration as a JSON document."""
+    project = store.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not project.configuration:
+        raise HTTPException(status_code=404, detail="No configuration generated yet")
+
+    config = project.configuration
+    export_data = {
+        "export_version": "1.0",
+        "exported_at": datetime.utcnow().isoformat(),
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "customer_name": project.customer_name,
+            "product_type": project.product_type,
+            "community_url": project.community_url or "",
+        },
+        "configuration": {
+            "summary": config.summary,
+            "generated_at": config.generated_at.isoformat() if config.generated_at else None,
+            "record_types": [rt.model_dump() for rt in config.record_types],
+            "departments": [d.model_dump() for d in config.departments],
+            "user_roles": [r.model_dump() for r in config.user_roles],
+        },
+        "statistics": {
+            "record_types_count": len(config.record_types),
+            "departments_count": len(config.departments),
+            "user_roles_count": len(config.user_roles),
+            "total_form_fields": sum(len(rt.form_fields) for rt in config.record_types),
+            "total_workflow_steps": sum(len(rt.workflow_steps) for rt in config.record_types),
+            "total_fees": sum(len(rt.fees) for rt in config.record_types),
+        },
+    }
+    return export_data
+
+
 # ============================================================================
 # INTELLIGENCE REPORT ENDPOINTS
 # ============================================================================
@@ -2722,80 +3034,15 @@ async def get_intelligence_report(project_id: str):
     }
 
 
-@app.post("/api/projects/{project_id}/re-analyze")
-async def re_analyze_with_context(project_id: str, data: dict = {}):
-    """Re-run analysis with additional user-provided context"""
-    project = store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
 
-    additional_context = data.get("additional_context", "")
-
-    # Get existing CSV data
-    upload_dir = os.path.join(UPLOAD_DIR, project_id)
-    all_csv_data = ""
-    if project.uploaded_files:
-        for f in project.uploaded_files:
-            file_path = os.path.join(upload_dir, f.filename)
-            if os.path.exists(file_path):
-                with open(file_path, "r") as fp:
-                    content = fp.read()
-                    metadata = CSVParser.parse(content)
-                    all_csv_data += f"\n--- File: {f.filename} ---\n"
-                    all_csv_data += CSVParser.to_summary_string(metadata)
-
-    # Get community research
-    community_context = ""
-    if project.community_research:
-        try:
-            research = json.loads(project.community_research)
-            community_context = web_researcher.format_for_analysis(research)
-        except Exception:
-            pass
-
-    # Match template
-    matched_template = _match_peer_template(all_csv_data, project.customer_name)
-    template_context = _build_intelligence_context(all_csv_data, community_context, matched_template)
-
-    combined_data = f"""## SOURCE 1: Uploaded CSV Data
-{all_csv_data}
-
-## SOURCE 2: Community Research
-{community_context if community_context else "Not available."}
-
-## SOURCE 3: Peer City Reference
-{template_context}
-
-## SOURCE 4: Additional Context from User
-{additional_context if additional_context else "None provided."}
-
-## SOURCE 5: Industry Best Practices
-Use your knowledge to build the most complete configuration possible.
-"""
-
-    store.update_project(project_id, status="analyzing", analysis_progress=50, analysis_stage="Re-analyzing with additional context...")
-
-    try:
-        configuration = claude_service.analyze_csv_data(combined_data)
-        intel_report = _build_intelligence_report(all_csv_data, community_context, matched_template, configuration)
-
-        store.save_configuration(project_id, configuration)
-        store.update_project(
-            project_id,
-            status="configured",
-            analysis_progress=100,
-            analysis_stage="Complete",
-            intelligence_report=json.dumps(intel_report)
-        )
-
-        return {"status": "configured", "message": "Re-analysis complete", "intelligence": intel_report}
-    except Exception as e:
-        store.update_project(project_id, status="error", analysis_stage=f"Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
+# ═══════════════════════════════════════════════════════════════
+# 7. WEB SCRAPING
+# ═══════════════════════════════════════════════════════════════
+def scrape_community_website(base_url: str, max_pages: int = 100, continuation: Optional[Dict] = None) -> dict:
     """Scrape a government website comprehensively for permit/license/fee content.
+
+    Supports multi-pass scraping with continuation data. Can resume from a previous
+    incomplete pass and follows links to known municipal code hosting sites.
 
     Returns structured scrape data including pages, PDFs, and combined text.
     Used by the unified analysis pipeline.
@@ -2805,11 +3052,36 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
     import time as _time
     from html.parser import HTMLParser
 
-    scraped_pages = []
-    pdf_links = []  # [{url, filename, found_on}]
-    visited = set()
-    # Priority queue: (priority_score, url) — lower score = higher priority
-    priority_queue = [(0, base_url)]
+    # Known municipal code hosting domains to follow cross-domain
+    KNOWN_MUNICIPAL_CODE_DOMAINS = {
+        'library.municode.com',
+        'municode.com',
+        'sterlingcodifiers.com',
+        'codepublishing.com',
+        'qcode.us',
+        'codelibrary.amlegal.com',
+        'amlegal.com',
+        'ecode360.com',
+        'municodeweb.com',
+        'codebook.com'
+    }
+
+    # Initialize or restore state from continuation
+    if continuation:
+        visited = set(continuation.get('visited', []))
+        priority_queue = continuation.get('queue', [(0, base_url)])
+        scraped_pages = continuation.get('pages', [])
+        pdf_links = continuation.get('pdfs', [])
+        pages_analyzed = len(scraped_pages)
+        pass_number = continuation.get('pass_number', 1)
+        print(f"[SCRAPE] Resuming pass {pass_number}: {len(scraped_pages)} pages, {len(visited)} visited, {len(priority_queue)} queued")
+    else:
+        visited = set()
+        priority_queue = [(0, base_url)]
+        scraped_pages = []
+        pdf_links = []
+        pages_analyzed = 0
+        pass_number = 1
 
     # Simple HTML parser to extract links and text
     class LinkTextExtractor(HTMLParser):
@@ -2853,7 +3125,13 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
     HIGH_PRIORITY_URL_KEYWORDS = [
         'permit', 'license', 'fee', 'schedule', 'application', 'form',
         'building', 'planning', 'zoning', 'code-enforcement', 'inspection',
-        'ordinance', 'municipal-code', 'development-services'
+        'ordinance', 'municipal-code', 'development-services', 'title-', 'chapter-',
+        'section-', 'regulation', 'standard', 'policy', 'procedure', 'guideline',
+        'requirement', 'fee-schedule', 'rate-schedule', 'master-fee', 'development-code',
+        'land-use', 'general-plan', 'specific-plan', 'design-standard', 'improvement-standard',
+        'subdivision', 'grading', 'stormwater', 'fire-prevention', 'public-works',
+        'utilities', 'water', 'sewer', 'encroachment', 'right-of-way', 'impact-fee',
+        'mitigation', 'environmental', 'ceqa'
     ]
     MEDIUM_PRIORITY_URL_KEYWORDS = [
         'department', 'public-works', 'services', 'community-development',
@@ -2868,7 +3146,13 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
         'business', 'occupation', 'sign', 'demolition', 'grading',
         'electrical', 'plumbing', 'mechanical', 'fire', 'safety',
         'conditional use', 'variance', 'subdivision', 'encroachment',
-        'right-of-way', 'impact fee', 'plan check', 'certificate'
+        'right-of-way', 'impact fee', 'plan check', 'certificate', 'resolution',
+        'amendment', 'codified', 'chapter', 'section', 'title', 'municipal',
+        'regulation', 'standard', 'policy', 'procedure', 'guideline', 'rate',
+        'surcharge', 'deposit', 'bond', 'plan check', 'plan review', 'valuation',
+        'square foot', 'per unit', 'flat fee', 'hourly rate', 'technology fee',
+        'administrative fee', 'appeal', 'hearing', 'commission', 'council', 'board',
+        'review authority'
     ]
 
     def _url_priority(link_url: str) -> int:
@@ -2880,13 +3164,29 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
             return 2
         return 3
 
+    def _is_allowed_domain(parsed_url, parsed_base) -> bool:
+        """Check if a URL is on an allowed domain (same domain or known municipal code host)."""
+        if not parsed_url.netloc:
+            return True  # Relative links are always allowed
+        if parsed_url.netloc == parsed_base.netloc:
+            return True  # Same domain is allowed
+        # Check if it's a known municipal code hosting domain
+        return parsed_url.netloc in KNOWN_MUNICIPAL_CODE_DOMAINS
+
     all_text_content = []
-    pages_analyzed = 0
     parsed_base = urllib.parse.urlparse(base_url)
+    start_time = _time.time()
 
-    print(f"[SCRAPE] Starting crawl of {base_url} (max {max_pages} pages)")
+    print(f"[SCRAPE] Starting pass {pass_number} of {base_url} (max {max_pages} pages, 45s timeout)")
 
-    while priority_queue and pages_analyzed < max_pages:
+    pages_in_this_pass = 0
+    while priority_queue and pages_in_this_pass < max_pages:
+        # Check 45-second wall-clock time limit
+        elapsed = _time.time() - start_time
+        if elapsed > 45:
+            print(f"[SCRAPE] Time limit reached ({elapsed:.1f}s > 45s), stopping pass {pass_number}")
+            break
+
         # Sort by priority and take the best
         priority_queue.sort(key=lambda x: x[0])
         _priority, current_url = priority_queue.pop(0)
@@ -2899,11 +3199,14 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
         parsed_current = urllib.parse.urlparse(current_url)
         current_url = urllib.parse.urlunparse(parsed_current._replace(fragment=''))
 
-        # Skip if already visited or external
+        # Skip if already visited
         if current_url in visited:
             continue
-        if parsed_current.netloc and parsed_current.netloc != parsed_base.netloc:
+
+        # Check domain policy (same domain or known municipal code host)
+        if not _is_allowed_domain(parsed_current, parsed_base):
             continue
+
         # Skip non-web resources
         if any(current_url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.svg', '.css', '.js', '.ico', '.woff', '.woff2', '.ttf', '.mp4', '.mp3', '.zip']):
             continue
@@ -2947,10 +3250,10 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
                         "title": page_title,
                         "relevance": relevance_score,
                         "text_length": len(page_text),
-                        "text": page_text[:4000]  # Store more text per page
+                        "text": page_text[:8000]  # Store more text per page
                     })
                     all_text_content.append(
-                        f"--- PAGE: {page_title} ({current_url}) [relevance: {relevance_score}] ---\n{page_text[:4000]}\n"
+                        f"--- PAGE: {page_title} ({current_url}) [relevance: {relevance_score}] ---\n{page_text[:8000]}\n"
                     )
 
                 # Discover new links
@@ -2966,16 +3269,16 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
                         filename = full_link.split('/')[-1] or 'document.pdf'
                         pdf_links.append({"url": full_link, "filename": filename, "found_on": current_url})
                     else:
-                        # Check if same domain
+                        # Check if domain is allowed (same domain or known municipal code host)
                         parsed_link = urllib.parse.urlparse(full_link)
-                        if not parsed_link.netloc or parsed_link.netloc == parsed_base.netloc:
+                        if _is_allowed_domain(parsed_link, parsed_base):
                             priority = _url_priority(full_link)
                             priority_queue.append((priority, full_link))
 
-                pages_analyzed += 1
+                pages_in_this_pass += 1
 
-            # Polite crawling: 0.3s delay between requests
-            _time.sleep(0.3)
+            # Polite crawling: 0.2s delay between requests
+            _time.sleep(0.2)
 
         except Exception as e:
             continue
@@ -2991,7 +3294,17 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
     # Sort scraped pages by relevance (highest first)
     scraped_pages.sort(key=lambda p: p.get("relevance", 0), reverse=True)
 
-    print(f"[SCRAPE] Complete: {len(scraped_pages)} relevant pages, {len(unique_pdfs)} PDFs, {len(visited)} URLs visited")
+    print(f"[SCRAPE] Pass {pass_number} complete: {len(scraped_pages)} total pages, {len(unique_pdfs)} PDFs, {len(visited)} URLs visited, {pages_in_this_pass} in this pass")
+
+    # Prepare continuation data for next pass
+    continuation_data = {
+        "visited": list(visited),
+        "queue": priority_queue[:200],  # Cap to avoid huge response
+        "pages": scraped_pages,
+        "pdfs": unique_pdfs,
+        "pass_number": pass_number + 1,
+        "has_more": len(priority_queue) > 0
+    }
 
     return {
         "pages": scraped_pages,
@@ -3000,1495 +3313,25 @@ def scrape_community_website(base_url: str, max_pages: int = 35) -> dict:
         "pdfs_found": len(unique_pdfs),
         "total_chars": sum(len(p.get("text", "")) for p in scraped_pages),
         "total_text_length": sum(len(t) for t in all_text_content),
-        "combined_text": '\n\n'.join(all_text_content)[:60000],  # Cap at 60k chars
+        "combined_text": '\n\n'.join(all_text_content)[:150000],  # Cap at 150k chars
         "urls_visited": len(visited),
         "scraped_at": datetime.utcnow().isoformat(),
+        "continuation": continuation_data
     }
 
-
-# Keep backward-compatible alias
-def _deep_scrape_site(base_url: str, max_pages: int = 20) -> dict:
-    """Backward-compatible wrapper around scrape_community_website."""
-    result = scrape_community_website(base_url, max_pages)
-    # Map new format to old format for existing consumers
-    return {
-        "pages_scraped": result["pages_scraped"],
-        "pdfs_found": result["pdfs_found"],
-        "pdf_links": [p["url"] for p in result.get("pdfs", [])][:10],
-        "total_text_length": result["total_text_length"],
-        "relevant_pages": [{"url": p["url"], "relevance": p["relevance"], "text_length": p["text_length"], "text_preview": p.get("text", "")[:2000]} for p in result.get("pages", [])[:15]],
-        "combined_text": result["combined_text"],
-        "urls_visited": result["urls_visited"],
-    }
-
-
-@app.post("/api/projects/{project_id}/deep-scrape")
-async def deep_scrape_project(project_id: str, data: dict = {}):
-    """Deep scrape the project's community website for permit data, then re-analyze."""
-    project = store.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    agent_id = data.get("agent_id", "all")
-    url = data.get("url", "") or project.community_url
-
-    if not url:
-        raise HTTPException(status_code=400, detail="No community URL configured. Please add a community website URL to the project.")
-
-    # Ensure URL has protocol
-    if not url.startswith('http'):
-        url = f"https://{url}"
-
-    try:
-        # Phase 1: Deep scrape
-        store.update_project(project_id, status="analyzing", analysis_progress=10, analysis_stage=f"Deep scraping {url}...")
-
-        scrape_results = _deep_scrape_site(url, max_pages=20)
-
-        store.update_project(project_id, analysis_progress=40, analysis_stage=f"Found {scrape_results['pages_scraped']} relevant pages, {scrape_results['pdfs_found']} PDFs...")
-
-        # Phase 2: AI analysis of scraped content
-        if scrape_results['combined_text'] and ANTHROPIC_AVAILABLE:
-            store.update_project(project_id, analysis_progress=50, analysis_stage="AI analyzing scraped content...")
-
-            scrape_summary = _extract_with_ai(
-                f"""You are an expert in municipal government permit/license processes. Analyze the following content scraped from a government website and extract ALL information relevant to configuring a PLC (Permitting, Licensing, and Code Enforcement) system.
-
-Focus on identifying:
-1. All permit and license types offered
-2. Fee amounts and fee structures
-3. Application requirements and form fields
-4. Workflow/approval processes
-5. Required documents for each permit type
-6. Department names and contact info
-7. Inspection requirements
-8. Any ordinance references
-
-SCRAPED WEBSITE CONTENT:
-{scrape_results['combined_text'][:30000]}
-
-Provide a comprehensive, structured summary of all findings. Be thorough - extract every data point you can find.""",
-                "",
-                "deep_scrape_analysis"
-            )
-        else:
-            scrape_summary = f"Scraped {scrape_results['pages_scraped']} pages with {scrape_results['total_text_length']} characters of relevant content."
-
-        # Phase 3: Rebuild configuration with new data
-        store.update_project(project_id, analysis_progress=65, analysis_stage="Rebuilding configuration with deep scrape data...")
-
-        # Get existing CSV data
-        upload_dir = os.path.join(UPLOAD_DIR, project_id)
-        all_csv_data = ""
-        if project.uploaded_files:
-            for f in project.uploaded_files:
-                file_path = os.path.join(upload_dir, f.filename)
-                if os.path.exists(file_path):
-                    with open(file_path, "r") as fp:
-                        content = fp.read()
-                        metadata = CSVParser.parse(content)
-                        all_csv_data += f"\n--- File: {f.filename} ---\n"
-                        all_csv_data += CSVParser.to_summary_string(metadata)
-
-        # Get community research
-        community_context = ""
-        if project.community_research:
-            try:
-                research = json.loads(project.community_research)
-                community_context = web_researcher.format_for_analysis(research)
-            except Exception:
-                pass
-
-        # Match template
-        matched_template = _match_peer_template(all_csv_data, project.customer_name)
-        template_context = _build_intelligence_context(all_csv_data, community_context, matched_template)
-
-        # Build enhanced combined context with deep scrape data
-        combined_data = f"""## SOURCE 1: Uploaded CSV Data
-{all_csv_data if all_csv_data else "No CSV data uploaded."}
-
-## SOURCE 2: Community Research
-{community_context if community_context else "Not available."}
-
-## SOURCE 3: Peer City Reference
-{template_context}
-
-## SOURCE 4: DEEP WEBSITE SCRAPE (PRIMARY NEW DATA)
-The following data was extracted from a deep scrape of {scrape_results['urls_visited']} URLs on the government website.
-{scrape_results['pages_scraped']} relevant pages found, {scrape_results['pdfs_found']} PDF documents discovered.
-
-AI Analysis of Scraped Content:
-{scrape_summary or 'No AI analysis available.'}
-
-Raw scraped highlights:
-{scrape_results['combined_text'][:15000]}
-
-## SOURCE 5: Industry Best Practices
-Use your knowledge to fill any remaining gaps and build the most complete configuration possible.
-"""
-
-        store.update_project(project_id, analysis_progress=75, analysis_stage="AI generating enhanced configuration...")
-
-        configuration = claude_service.analyze_csv_data(combined_data)
-
-        # Phase 4: Build updated intelligence report
-        store.update_project(project_id, analysis_progress=90, analysis_stage="Finalizing intelligence report...")
-
-        intel_report = _build_intelligence_report(all_csv_data, community_context, matched_template, configuration)
-
-        # Add deep scrape source to the report
-        intel_report["sources_used"].append({
-            "type": "deep_scrape",
-            "name": f"Deep Website Scrape: {url}",
-            "status": "analyzed",
-            "description": f"Crawled {scrape_results['urls_visited']} URLs, found {scrape_results['pages_scraped']} relevant pages and {scrape_results['pdfs_found']} PDFs"
-        })
-
-        # Add scrape stats
-        intel_report["deep_scrape_stats"] = {
-            "urls_visited": scrape_results["urls_visited"],
-            "relevant_pages": scrape_results["pages_scraped"],
-            "pdfs_found": scrape_results["pdfs_found"],
-            "total_text_analyzed": scrape_results["total_text_length"],
-            "data_points_extracted": scrape_results["pages_scraped"] * 15,  # Estimated
-            "pdf_links": scrape_results.get("pdf_links", []),
-            "scrape_summary": scrape_summary[:2000] if scrape_summary else "",
-        }
-
-        # Phase 5: Save
-        store.save_configuration(project_id, configuration)
-        store.update_project(
-            project_id,
-            status="configured",
-            analysis_progress=100,
-            analysis_stage="Deep analysis complete",
-            intelligence_report=json.dumps(intel_report)
-        )
-
-        # Build response matching frontend expectations (AgentDetailDialog.jsx)
-        deep_stats = intel_report.get("deep_scrape_stats", {})
-        return {
-            "status": "complete",
-            "message": f"Deep scrape analyzed {scrape_results['pages_scraped']} pages and {scrape_results['pdfs_found']} PDFs. Configuration has been rebuilt.",
-            "deep_scrape_stats": {
-                "pages_scraped": deep_stats.get("relevant_pages", scrape_results.get("pages_scraped", 0)),
-                "pdfs_found": deep_stats.get("pdfs_found", scrape_results.get("pdfs_found", 0)),
-                "data_points": deep_stats.get("data_points_extracted", 0),
-                "urls_visited": deep_stats.get("urls_visited", 0),
-                "total_text_analyzed": deep_stats.get("total_text_analyzed", 0),
-            },
-            "summary": deep_stats.get("scrape_summary", "") or scrape_summary or f"Analyzed {scrape_results['pages_scraped']} pages and {scrape_results['pdfs_found']} PDFs from the community website.",
-            "intelligence": intel_report,
-        }
-
-    except Exception as e:
-        store.update_project(project_id, status="configured", analysis_stage=f"Deep scrape error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Deep scrape failed: {str(e)}")
 
 
 # ============================================================================
-# LMS CONTENT GENERATION
+# (LMS CONTENT GENERATION REMOVED - Not used by frontend)
 # ============================================================================
-
-@app.post("/api/projects/{project_id}/lms/generate/{content_type}")
-async def generate_lms_content(project_id: str, content_type: str):
-    """Generate LMS content for a project configuration.
-
-    content_type: "training-deck", "faq", "quiz", or "handbook"
-    Returns: { filename, content_base64, size_bytes, generated_at }
-    """
-    valid_types = ["training-deck", "faq", "quiz", "handbook"]
-    if content_type not in valid_types:
-        raise HTTPException(status_code=400, detail=f"Invalid content_type. Must be one of {valid_types}")
-
-    project = store.get_project(project_id)
-    if not project or not project.configuration:
-        raise HTTPException(status_code=404, detail="Project or configuration not found")
-
-    if not project.configuration.record_types:
-        raise HTTPException(status_code=400, detail="Project has no record types configured")
-
-    generated_at = datetime.utcnow().isoformat()
-
-    try:
-        if content_type == "training-deck":
-            filename, content_bytes = _generate_training_deck(project)
-        elif content_type == "faq":
-            filename, content_bytes = _generate_faq(project)
-        elif content_type == "quiz":
-            filename, content_bytes = _generate_quiz(project)
-        else:  # handbook
-            filename, content_bytes = _generate_handbook(project)
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail=f"Generation failed ({content_type}): {str(e)[:300]}")
-
-    content_base64 = base64.b64encode(content_bytes).decode("utf-8")
-
-    return {
-        "filename": filename,
-        "content_base64": content_base64,
-        "size_bytes": len(content_bytes),
-        "generated_at": generated_at
-    }
-
-
-def _get_community_branding(project):
-    """Extract branding info from project for use in generated materials."""
-    return {
-        "name": project.customer_name or "Community",
-        "url": project.community_url or "",
-        "primary_color": (26, 86, 219),  # Blue default
-        "dark_color": (15, 23, 42),
-        "light_color": (241, 245, 249),
-        "accent_color": (16, 185, 129),
-    }
-
-
-def _safe_text(text, max_len=500):
-    """Sanitize text for FPDF - remove unicode chars that cause issues."""
-    if not text:
-        return ""
-    cleaned = text[:max_len]
-    # Replace common unicode chars with ASCII equivalents
-    replacements = {
-        '\u2013': '-', '\u2014': '--', '\u2018': "'", '\u2019': "'",
-        '\u201c': '"', '\u201d': '"', '\u2022': '-', '\u2026': '...',
-        '\u00ae': '(R)', '\u00a9': '(c)', '\u2122': '(TM)',
-        '\u00b0': ' deg', '\u00bd': '1/2', '\u00bc': '1/4',
-        '\u00be': '3/4', '\u00e9': 'e', '\u00e8': 'e', '\u00f1': 'n',
-    }
-    for old, new in replacements.items():
-        cleaned = cleaned.replace(old, new)
-    return cleaned.encode('latin-1', errors='replace').decode('latin-1')
-
-
-def _generate_training_deck(project) -> tuple:
-    """Generate a professional PowerPoint training deck (.pptx)"""
-    from pptx import Presentation
-    from pptx.util import Inches, Pt, Emu
-    from pptx.enum.text import PP_ALIGN
-    from pptx.dml.color import RGBColor
-
-    brand = _get_community_branding(project)
-    config = project.configuration
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
-
-    PRIMARY = RGBColor(*brand["primary_color"])
-    DARK = RGBColor(*brand["dark_color"])
-    WHITE = RGBColor(255, 255, 255)
-    LIGHT_BG = RGBColor(248, 250, 252)
-    ACCENT = RGBColor(*brand["accent_color"])
-    GRAY = RGBColor(100, 116, 139)
-
-    def _set_bg(slide, color):
-        bg = slide.background
-        fill = bg.fill
-        fill.solid()
-        fill.fore_color.rgb = color
-
-    def add_branded_slide(title_text, subtitle_text="", dark=True):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _set_bg(slide, DARK if dark else WHITE)
-        # Accent bar at top
-        bar = slide.shapes.add_shape(1, Inches(0), Inches(0), prs.slide_width, Inches(0.06))
-        bar.fill.solid()
-        bar.fill.fore_color.rgb = PRIMARY
-        bar.line.fill.background()
-        # Title
-        tx = slide.shapes.add_textbox(Inches(0.8), Inches(2.2), Inches(11.5), Inches(2))
-        tf = tx.text_frame
-        tf.word_wrap = True
-        p = tf.paragraphs[0]
-        p.text = title_text
-        p.font.size = Pt(44)
-        p.font.bold = True
-        p.font.color.rgb = WHITE if dark else DARK
-        if subtitle_text:
-            sub = slide.shapes.add_textbox(Inches(0.8), Inches(4.5), Inches(11.5), Inches(1))
-            stf = sub.text_frame
-            stf.word_wrap = True
-            sp = stf.paragraphs[0]
-            sp.text = subtitle_text
-            sp.font.size = Pt(20)
-            sp.font.color.rgb = RGBColor(148, 163, 184) if dark else GRAY
-        return slide
-
-    def add_content_slide(title_text, bullets, two_col=False):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _set_bg(slide, WHITE)
-        # Top accent bar
-        bar = slide.shapes.add_shape(1, Inches(0), Inches(0), prs.slide_width, Inches(0.04))
-        bar.fill.solid()
-        bar.fill.fore_color.rgb = PRIMARY
-        bar.line.fill.background()
-        # Title
-        tx = slide.shapes.add_textbox(Inches(0.8), Inches(0.5), Inches(11.5), Inches(0.8))
-        tf = tx.text_frame
-        p = tf.paragraphs[0]
-        p.text = title_text
-        p.font.size = Pt(32)
-        p.font.bold = True
-        p.font.color.rgb = DARK
-        # Underline
-        line = slide.shapes.add_shape(1, Inches(0.8), Inches(1.4), Inches(2), Inches(0))
-        line.line.color.rgb = PRIMARY
-        line.line.width = Pt(3)
-
-        if two_col and len(bullets) > 3:
-            mid = len(bullets) // 2
-            for col, items, x_pos in [(0, bullets[:mid], 0.8), (1, bullets[mid:], 7.0)]:
-                box = slide.shapes.add_textbox(Inches(x_pos), Inches(1.8), Inches(5.5), Inches(5))
-                tf = box.text_frame
-                tf.word_wrap = True
-                for i, b in enumerate(items):
-                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                    p.text = b
-                    p.font.size = Pt(16)
-                    p.font.color.rgb = DARK
-                    p.space_before = Pt(8)
-                    p.space_after = Pt(4)
-        else:
-            box = slide.shapes.add_textbox(Inches(0.8), Inches(1.8), Inches(11.5), Inches(5))
-            tf = box.text_frame
-            tf.word_wrap = True
-            for i, b in enumerate(bullets):
-                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                p.text = b
-                p.font.size = Pt(18)
-                p.font.color.rgb = DARK
-                p.space_before = Pt(8)
-                p.space_after = Pt(4)
-        return slide
-
-    # ---- SLIDE 1: Title ----
-    add_branded_slide(
-        f"{brand['name']}",
-        f"OpenGov Implementation - Staff Training & Process Overview"
-    )
-
-    # ---- SLIDE 2: Agenda ----
-    add_content_slide("Training Agenda", [
-        "1. Project Overview & Goals",
-        "2. Current vs. New Process Comparison",
-        "3. Record Types & Applications",
-        "4. Fee Schedules & Payment Processing",
-        "5. Workflow & Approval Routing",
-        "6. Departments & Staff Roles",
-        "7. Required Documents & Submissions",
-        "8. System Navigation & Key Features",
-        "9. Q&A and Next Steps",
-    ])
-
-    # ---- SLIDE 3: Project Overview ----
-    overview_bullets = [
-        f"Community: {brand['name']}",
-        f"Total Record Types: {len(config.record_types)}",
-        f"Departments Configured: {len(config.departments)}",
-        f"User Roles Defined: {len(config.user_roles)}",
-    ]
-    if project.community_url:
-        overview_bullets.append(f"Community Website: {project.community_url}")
-    overview_bullets.extend([
-        "",
-        "GOAL: Streamline permitting, licensing, and code enforcement",
-        "through a centralized digital platform that improves efficiency,",
-        "transparency, and the applicant experience."
-    ])
-    add_content_slide("Project Overview", overview_bullets)
-
-    # ---- SLIDE 4: What's Changing ----
-    add_content_slide("What's Changing", [
-        "BEFORE: Paper-based or fragmented digital processes",
-        "  - Manual routing, lost applications, inconsistent fee collection",
-        "  - Limited visibility for applicants on application status",
-        "  - Siloed departmental processes with no unified tracking",
-        "",
-        "AFTER: Unified OpenGov Digital Platform",
-        "  - Online submission with automated workflow routing",
-        "  - Real-time status tracking for staff and applicants",
-        "  - Centralized fee calculation and payment processing",
-        "  - Configurable business rules and conditional logic",
-    ])
-
-    # ---- SLIDES 5+: Each Record Type ----
-    for rt in config.record_types[:8]:
-        bullets = []
-        if rt.description:
-            bullets.append(f"Description: {rt.description[:200]}")
-        if rt.category:
-            bullets.append(f"Category: {rt.category}")
-        if rt.form_fields:
-            field_names = [f.name for f in rt.form_fields[:6]]
-            bullets.append(f"Key Form Fields: {', '.join(field_names)}")
-            required = [f.name for f in rt.form_fields if f.required][:4]
-            if required:
-                bullets.append(f"Required Fields: {', '.join(required)}")
-        if rt.fees:
-            for fee in rt.fees[:4]:
-                bullets.append(f"Fee: {fee.name} - ${fee.amount:.2f} ({fee.fee_type})")
-        if rt.workflow_steps:
-            steps = sorted(rt.workflow_steps, key=lambda s: s.order)[:6]
-            step_str = " -> ".join([s.name for s in steps])
-            bullets.append(f"Workflow: {step_str}")
-        if rt.required_documents:
-            doc_names = [d.name for d in rt.required_documents[:4]]
-            bullets.append(f"Required Documents: {', '.join(doc_names)}")
-        add_content_slide(f"Record Type: {rt.name}", bullets)
-
-    # ---- Fee Schedule Summary ----
-    fee_bullets = []
-    for rt in config.record_types:
-        if rt.fees:
-            fee_bullets.append(f"--- {rt.name} ---")
-            for fee in rt.fees[:5]:
-                fee_bullets.append(f"  {fee.name}: ${fee.amount:.2f} ({fee.fee_type})")
-    if fee_bullets:
-        add_content_slide("Complete Fee Schedule", fee_bullets[:16], two_col=True)
-
-    # ---- Departments ----
-    dept_bullets = []
-    for d in config.departments[:10]:
-        desc = f" - {d.description[:80]}" if d.description else ""
-        dept_bullets.append(f"{d.name}{desc}")
-    if dept_bullets:
-        add_content_slide("Departments & Organization", dept_bullets, two_col=True)
-
-    # ---- User Roles ----
-    role_bullets = []
-    for r in config.user_roles[:8]:
-        desc = f" - {r.description[:80]}" if r.description else ""
-        role_bullets.append(f"{r.name}{desc}")
-        if r.permissions:
-            role_bullets.append(f"  Permissions: {', '.join(r.permissions[:4])}")
-    if role_bullets:
-        add_content_slide("User Roles & Permissions", role_bullets)
-
-    # ---- Key System Features ----
-    add_content_slide("Key System Features", [
-        "Online Application Portal - 24/7 submission for applicants",
-        "Automated Routing - Applications go to the right department automatically",
-        "Real-Time Status - Track applications from submission to approval",
-        "Integrated Payments - Online fee calculation and payment processing",
-        "Document Management - Upload, review, and store required documents",
-        "Inspection Scheduling - Schedule and track field inspections",
-        "Reporting & Analytics - Dashboards for workload and performance",
-        "Notifications - Automated emails at each workflow stage",
-    ])
-
-    # ---- Next Steps ----
-    add_branded_slide(
-        "Next Steps",
-        "1. Review this training material  |  2. Attend hands-on training sessions  |  3. Complete the Knowledge Quiz  |  4. Begin using the new system"
-    )
-
-    # ---- Thank You ----
-    add_branded_slide(
-        "Thank You",
-        f"{brand['name']} - OpenGov Implementation Team"
-    )
-
-    output = io.BytesIO()
-    prs.save(output)
-    output.seek(0)
-    return "training_deck.pptx", output.read()
-
-
-def _generate_faq(project) -> tuple:
-    """Generate comprehensive FAQ document (.pdf)"""
-    from fpdf import FPDF
-
-    brand = _get_community_branding(project)
-    config = project.configuration
-    pdf = FPDF()
-    pdf.set_margins(15, 15, 15)
-    pdf.set_auto_page_break(auto=True, margin=20)
-
-    r, g, b = brand["primary_color"]
-    dr, dg, db = brand["dark_color"]
-    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-
-    def add_header(text, size=16):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "B", size)
-        pdf.set_text_color(r, g, b)
-        pdf.cell(usable_w, 10, _safe_text(text), ln=True)
-        pdf.set_text_color(dr, dg, db)
-        pdf.ln(2)
-
-    def add_qa(question, answer):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "B", 11)
-        pdf.set_text_color(dr, dg, db)
-        pdf.multi_cell(usable_w, 6, _safe_text(f"Q: {question}"))
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "", 10)
-        pdf.set_text_color(80, 80, 80)
-        pdf.multi_cell(usable_w, 5, _safe_text(f"A: {answer}", 800))
-        pdf.ln(4)
-
-    # Cover page
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 28)
-    pdf.set_text_color(r, g, b)
-    pdf.ln(30)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 15, _safe_text(brand["name"]), ln=True, align="C")
-    pdf.set_font("Arial", "", 18)
-    pdf.set_text_color(dr, dg, db)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 10, "Frequently Asked Questions", ln=True, align="C")
-    pdf.set_font("Arial", "", 12)
-    pdf.set_text_color(100, 100, 100)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, "OpenGov Implementation Guide", ln=True, align="C")
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, _safe_text(f"Generated: {datetime.utcnow().strftime('%B %d, %Y')}"), ln=True, align="C")
-
-    # Section 1: General
-    pdf.add_page()
-    add_header("1. General Questions")
-
-    add_qa("What is this new system?",
-        f"{brand['name']} is transitioning to a unified OpenGov platform for managing permits, licenses, and code enforcement. "
-        "This system replaces previous paper-based or fragmented digital processes with a centralized, online platform.")
-    add_qa("Why are we making this change?",
-        "The new system provides online submission, automated workflow routing, real-time status tracking, "
-        "integrated payment processing, and comprehensive reporting. This improves efficiency for staff and transparency for applicants.")
-    add_qa("When will the new system go live?",
-        "The go-live date will be communicated by your project manager. Training sessions will be held before launch to ensure all staff are comfortable with the new processes.")
-    add_qa("Will my existing applications be transferred?",
-        "Your project team will determine the data migration strategy. Active applications may be migrated or completed under the current system depending on their status.")
-    add_qa("Who do I contact for help?",
-        f"Contact the {brand['name']} Help Desk or your designated OpenGov implementation specialist for technical support and process questions.")
-
-    # Section 2: For Applicants
-    add_header("2. For Applicants & Public Users")
-
-    add_qa("How do I submit an application online?",
-        f"Visit the {brand['name']} online portal, select the application type you need, complete the required form fields, upload supporting documents, pay applicable fees, and submit. You'll receive a confirmation email with a tracking number.")
-
-    for rt in config.record_types[:5]:
-        if rt.form_fields:
-            required_fields = [f.name for f in rt.form_fields if f.required][:5]
-            if required_fields:
-                add_qa(f"What information do I need to apply for a {rt.name}?",
-                    f"To apply for a {rt.name}, you'll need to provide: {', '.join(required_fields)}. "
-                    + (f"Required documents include: {', '.join([d.name for d in rt.required_documents[:3]])}." if rt.required_documents else ""))
-        if rt.fees:
-            fee_list = ", ".join([f"{f.name}: ${f.amount:.2f}" for f in rt.fees[:3]])
-            add_qa(f"What are the fees for a {rt.name}?",
-                f"The fees for {rt.name} are: {fee_list}. Fees can be paid online by credit card or in person.")
-
-    add_qa("How do I check the status of my application?",
-        "Log into the portal with your account credentials. Your dashboard shows all submitted applications with their current status, pending actions, and estimated completion dates.")
-
-    # Section 3: For Staff
-    pdf.add_page()
-    add_header("3. For Staff & Reviewers")
-
-    add_qa("How are applications assigned to me?",
-        "Applications are automatically routed to the appropriate department and reviewer based on the record type and configured workflow rules. You'll receive email notifications when new items require your attention.")
-
-    for rt in config.record_types[:3]:
-        if rt.workflow_steps:
-            steps = sorted(rt.workflow_steps, key=lambda s: s.order)
-            step_desc = " -> ".join([s.name for s in steps[:6]])
-            add_qa(f"What is the review workflow for {rt.name}?",
-                f"The workflow for {rt.name} follows these steps: {step_desc}. "
-                f"Each step has designated reviewers and approval requirements.")
-
-    add_qa("Can I send an application back for corrections?",
-        "Yes. At any review step, you can request additional information or corrections from the applicant. "
-        "The system will notify the applicant and pause the workflow until they respond.")
-    add_qa("How do I approve or deny an application?",
-        "Open the application from your task queue, review all submitted information and documents, "
-        "add any review comments, then click Approve or Deny. The system will automatically route to the next step or notify the applicant of the decision.")
-
-    # Section 4: Departments
-    if config.departments:
-        add_header("4. Departments & Responsibilities")
-        for dept in config.departments[:6]:
-            desc = dept.description if dept.description else "Responsible for reviewing and processing applications within their jurisdiction."
-            add_qa(f"What does the {dept.name} department handle?", desc)
-
-    # Section 5: Troubleshooting
-    add_header("5. Troubleshooting & Technical Support")
-    add_qa("I can't log into the system.",
-        "Verify your username and password. If you've forgotten your password, use the 'Forgot Password' link on the login page. "
-        "Contact the Help Desk if issues persist.")
-    add_qa("My application appears stuck in a workflow step.",
-        "Check the application's activity log for any pending actions or reviewer comments. "
-        "If the application has been pending beyond the expected timeframe, contact your supervisor or the system administrator.")
-    add_qa("A fee amount appears incorrect.",
-        "Fee calculations are based on the configured fee schedule. If you believe there is an error, "
-        "contact the system administrator with the application number and details of the discrepancy.")
-    add_qa("I need to upload a large document but it won't go through.",
-        "Check the file size limit (typically 25MB per file). Ensure the file format is accepted (PDF, JPG, PNG, DOC). "
-        "Try compressing the file or splitting it into smaller documents if needed.")
-
-    return "faq_guide.pdf", bytes(pdf.output())
-
-
-def _generate_quiz(project) -> tuple:
-    """Generate professional knowledge assessment quiz (.pdf)"""
-    from fpdf import FPDF
-
-    brand = _get_community_branding(project)
-    config = project.configuration
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-
-    r, g, b = brand["primary_color"]
-    dr, dg, db = brand["dark_color"]
-
-    questions = []
-    answer_key = []
-
-    # Generate questions from configuration data
-    # Q: Record type count
-    rt_count = len(config.record_types)
-    questions.append({
-        "q": f"How many record types are configured in the {brand['name']} system?",
-        "options": [str(rt_count), str(rt_count + 2), str(max(1, rt_count - 1)), str(rt_count + 5)],
-        "answer": "A"
-    })
-
-    # Q: Per record type - required documents
-    for rt in config.record_types[:4]:
-        if rt.required_documents and len(rt.required_documents) >= 2:
-            correct_doc = rt.required_documents[0].name
-            wrong_options = ["Notarized Affidavit", "Birth Certificate", "Vehicle Registration", "Insurance Binder", "Tax Clearance Letter"]
-            wrong = [w for w in wrong_options if w.lower() != correct_doc.lower()][:3]
-            questions.append({
-                "q": f"Which of the following is a required document for a {rt.name} application?",
-                "options": [correct_doc, wrong[0], wrong[1], wrong[2]],
-                "answer": "A"
-            })
-
-        # Q: Fees
-        if rt.fees:
-            fee = rt.fees[0]
-            correct = f"${fee.amount:.2f}"
-            wrong_amounts = [f"${fee.amount * 1.5:.2f}", f"${fee.amount * 0.5:.2f}", f"${fee.amount * 2:.2f}"]
-            questions.append({
-                "q": f"What is the {fee.name} fee for a {rt.name}?",
-                "options": [correct, wrong_amounts[0], wrong_amounts[1], wrong_amounts[2]],
-                "answer": "A"
-            })
-
-        # Q: Workflow steps
-        if rt.workflow_steps and len(rt.workflow_steps) >= 2:
-            steps = sorted(rt.workflow_steps, key=lambda s: s.order)
-            first_step = steps[0].name
-            second_step = steps[1].name if len(steps) > 1 else "Review"
-            questions.append({
-                "q": f"What is the first step in the {rt.name} workflow?",
-                "options": [first_step, second_step, "Final Approval", "Payment Collection"],
-                "answer": "A"
-            })
-
-    # General knowledge questions
-    general = [
-        {"q": "What is the primary benefit of the new OpenGov system?",
-         "options": ["Centralized digital workflow with automated routing", "Faster internet speeds", "Reduced staff headcount", "Elimination of all fees"],
-         "answer": "A"},
-        {"q": "How are applicants notified of status changes?",
-         "options": ["Automated email notifications", "Phone calls from staff", "Physical mail only", "They must check in person"],
-         "answer": "A"},
-        {"q": "Who can request additional information from an applicant during review?",
-         "options": ["The assigned reviewer at any workflow step", "Only the department head", "Only the system administrator", "No one - applications cannot be paused"],
-         "answer": "A"},
-        {"q": "What should you do if you identify an incorrect fee on an application?",
-         "options": ["Contact the system administrator with the application number", "Approve it anyway", "Delete the application", "Ignore it"],
-         "answer": "A"},
-        {"q": "How are applications routed to the correct department?",
-         "options": ["Automatically based on record type and workflow rules", "Manually by the front desk", "Randomly assigned", "Applicants choose their reviewer"],
-         "answer": "A"},
-    ]
-    questions.extend(general)
-
-    # Department questions
-    if config.departments and len(config.departments) >= 2:
-        dept = config.departments[0]
-        wrong_depts = ["Human Resources", "Marketing", "Janitorial Services"]
-        questions.append({
-            "q": f"Which department is part of the {brand['name']} implementation?",
-            "options": [dept.name, wrong_depts[0], wrong_depts[1], wrong_depts[2]],
-            "answer": "A"
-        })
-
-    # Role questions
-    if config.user_roles and len(config.user_roles) >= 2:
-        role = config.user_roles[0]
-        questions.append({
-            "q": f"What is the '{role.name}' role responsible for in the system?",
-            "options": [
-                role.description[:80] if role.description else "Reviewing and processing applications",
-                "Managing server hardware",
-                "Designing marketing materials",
-                "Maintaining the parking lot"
-            ],
-            "answer": "A"
-        })
-
-    # Shuffle options (but track answer)
-    import random
-    for q in questions:
-        opts = q["options"][:]
-        correct_text = opts[0]
-        random.shuffle(opts)
-        q["options"] = opts
-        q["answer"] = chr(65 + opts.index(correct_text))
-
-    # Limit to 20 questions
-    questions = questions[:20]
-
-    # --- Build PDF ---
-    pdf.set_margins(15, 15, 15)
-    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-
-    # Cover page
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 28)
-    pdf.set_text_color(r, g, b)
-    pdf.ln(25)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 15, _safe_text(brand["name"]), ln=True, align="C")
-    pdf.set_font("Arial", "", 18)
-    pdf.set_text_color(dr, dg, db)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 10, "Knowledge Assessment Quiz", ln=True, align="C")
-    pdf.set_font("Arial", "", 12)
-    pdf.set_text_color(100, 100, 100)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, "OpenGov Implementation Training", ln=True, align="C")
-    pdf.ln(15)
-    pdf.set_font("Arial", "", 11)
-    pdf.set_text_color(80, 80, 80)
-    pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(usable_w, 6, _safe_text(
-        "Instructions: Select the best answer for each question. This quiz covers the key concepts "
-        f"from the {brand['name']} OpenGov implementation training. There are {len(questions)} questions total. "
-        "An answer key is provided at the end."
-    ))
-    pdf.ln(5)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, "Name: ________________________________________", ln=True)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, "Date:  ________________________________________", ln=True)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, _safe_text(f"Score: _______ / {len(questions)}"), ln=True)
-
-    # Questions
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 14)
-    pdf.set_text_color(r, g, b)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 10, "Questions", ln=True)
-    pdf.ln(2)
-
-    for i, q in enumerate(questions):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "B", 11)
-        pdf.set_text_color(dr, dg, db)
-        pdf.multi_cell(usable_w, 6, _safe_text(f"{i+1}. {q['q']}"))
-        pdf.set_font("Arial", "", 10)
-        pdf.set_text_color(80, 80, 80)
-        for j, opt in enumerate(q["options"]):
-            letter = chr(65 + j)
-            pdf.set_x(pdf.l_margin)
-            pdf.cell(usable_w, 6, _safe_text(f"    {letter}) {opt}"), ln=True)
-        pdf.ln(3)
-        answer_key.append(f"{i+1}. {q['answer']}")
-
-    # Answer Key
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 14)
-    pdf.set_text_color(r, g, b)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 10, "Answer Key", ln=True)
-    pdf.ln(2)
-    pdf.set_font("Arial", "", 11)
-    pdf.set_text_color(dr, dg, db)
-    for ans in answer_key:
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(usable_w, 6, _safe_text(ans), ln=True)
-
-    return "knowledge_quiz.pdf", bytes(pdf.output())
-
-
-def _generate_handbook(project) -> tuple:
-    """Generate comprehensive process handbook (.pdf)"""
-    from fpdf import FPDF
-
-    brand = _get_community_branding(project)
-    config = project.configuration
-    pdf = FPDF()
-    pdf.set_margins(15, 15, 15)
-    pdf.set_auto_page_break(auto=True, margin=20)
-
-    r, g, b = brand["primary_color"]
-    dr, dg, db = brand["dark_color"]
-    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-
-    def section_header(text, size=16):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "B", size)
-        pdf.set_text_color(r, g, b)
-        pdf.cell(usable_w, 10, _safe_text(text), ln=True)
-        # Underline
-        pdf.set_draw_color(r, g, b)
-        pdf.line(pdf.l_margin, pdf.get_y(), 80, pdf.get_y())
-        pdf.ln(4)
-        pdf.set_text_color(dr, dg, db)
-
-    def sub_header(text):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "B", 12)
-        pdf.set_text_color(dr, dg, db)
-        pdf.cell(usable_w, 8, _safe_text(text), ln=True)
-        pdf.ln(1)
-
-    def body_text(text):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "", 10)
-        pdf.set_text_color(60, 60, 60)
-        pdf.multi_cell(usable_w, 5, _safe_text(text, 1000))
-        pdf.ln(2)
-
-    def bullet(text):
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Arial", "", 10)
-        pdf.set_text_color(60, 60, 60)
-        pdf.multi_cell(usable_w, 5, _safe_text(f"     - {text}", 500))
-
-    # ---- COVER PAGE ----
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 32)
-    pdf.set_text_color(r, g, b)
-    pdf.ln(40)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 15, _safe_text(brand["name"]), ln=True, align="C")
-    pdf.set_font("Arial", "", 20)
-    pdf.set_text_color(dr, dg, db)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 12, "Process Handbook", ln=True, align="C")
-    pdf.set_font("Arial", "", 14)
-    pdf.set_text_color(100, 100, 100)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 8, "OpenGov Implementation Guide", ln=True, align="C")
-    pdf.ln(10)
-    pdf.set_font("Arial", "", 11)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 6, _safe_text(f"Generated: {datetime.utcnow().strftime('%B %d, %Y')}"), ln=True, align="C")
-    if project.community_url:
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(usable_w, 6, _safe_text(f"Website: {project.community_url}"), ln=True, align="C")
-    pdf.ln(20)
-    pdf.set_draw_color(r, g, b)
-    pdf.line(60, pdf.get_y(), 150, pdf.get_y())
-    pdf.ln(5)
-    pdf.set_font("Arial", "I", 10)
-    pdf.set_text_color(120, 120, 120)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 6, "CONFIDENTIAL - For staff use only", ln=True, align="C")
-
-    # ---- TABLE OF CONTENTS ----
-    pdf.add_page()
-    section_header("Table of Contents")
-    pdf.set_font("Arial", "", 11)
-    pdf.set_text_color(dr, dg, db)
-    toc = [
-        "1. Introduction & Project Overview",
-        "2. System Overview & Key Features",
-    ]
-    for i, rt in enumerate(config.record_types, 1):
-        toc.append(f"  2.{i}. {rt.name}")
-    toc.extend([
-        "3. Fee Schedules",
-        "4. Departments & Organization",
-        "5. User Roles & Permissions",
-        "6. Workflow & Approval Processes",
-        "7. Document Requirements",
-        "8. Best Practices & Tips",
-        "9. Support & Resources",
-    ])
-    for item in toc:
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(usable_w, 6, _safe_text(item), ln=True)
-
-    # ---- SECTION 1: INTRODUCTION ----
-    pdf.add_page()
-    section_header("1. Introduction & Project Overview")
-    body_text(
-        f"This handbook serves as a comprehensive reference guide for the {brand['name']} "
-        "OpenGov implementation. It covers all configured record types, fee schedules, "
-        "workflow processes, departmental responsibilities, and user roles. "
-        "Staff should use this document alongside the Training Deck and FAQ Guide "
-        "as part of the complete training program."
-    )
-    body_text(
-        f"The {brand['name']} implementation includes {len(config.record_types)} record types, "
-        f"{len(config.departments)} departments, and {len(config.user_roles)} user roles. "
-        "The system is designed to streamline permitting, licensing, and code enforcement "
-        "processes through automated workflow routing, online submissions, and integrated "
-        "payment processing."
-    )
-
-    # ---- SECTION 2: RECORD TYPES ----
-    pdf.add_page()
-    section_header("2. Record Types & Applications")
-    body_text(
-        f"The following {len(config.record_types)} record types have been configured for {brand['name']}. "
-        "Each record type defines the application form, required documents, fee schedule, "
-        "and approval workflow for a specific permit, license, or enforcement action."
-    )
-
-    for idx, rt in enumerate(config.record_types, 1):
-        pdf.add_page()
-        sub_header(f"2.{idx}. {rt.name}")
-
-        if rt.category:
-            body_text(f"Category: {rt.category}")
-        if rt.description:
-            body_text(rt.description)
-
-        # Form Fields
-        if rt.form_fields:
-            pdf.ln(2)
-            sub_header("Application Form Fields")
-            for ff in rt.form_fields[:12]:
-                req_label = "Required" if ff.required else "Optional"
-                bullet(f"{ff.name} ({ff.field_type}, {req_label})")
-            if len(rt.form_fields) > 12:
-                body_text(f"... and {len(rt.form_fields) - 12} additional fields")
-
-        # Workflow
-        if rt.workflow_steps:
-            pdf.ln(2)
-            sub_header("Workflow Steps")
-            steps = sorted(rt.workflow_steps, key=lambda s: s.order)
-            for ws in steps[:10]:
-                role_info = f" [Assigned to: {ws.assigned_role}]" if ws.assigned_role else ""
-                bullet(f"Step {ws.order}: {ws.name}{role_info}")
-
-        # Fees
-        if rt.fees:
-            pdf.ln(2)
-            sub_header("Fee Schedule")
-            for fee in rt.fees[:8]:
-                bullet(f"{fee.name}: ${fee.amount:.2f} ({fee.fee_type})")
-
-        # Required Documents
-        if rt.required_documents:
-            pdf.ln(2)
-            sub_header("Required Documents")
-            for doc in rt.required_documents[:8]:
-                desc = f" - {doc.description[:80]}" if doc.description else ""
-                bullet(f"{doc.name}{desc}")
-
-    # ---- SECTION 3: FEE SCHEDULES ----
-    pdf.add_page()
-    section_header("3. Complete Fee Schedule")
-    body_text("The following is a consolidated view of all fees across record types.")
-    for rt in config.record_types:
-        if rt.fees:
-            sub_header(rt.name)
-            for fee in rt.fees[:10]:
-                bullet(f"{fee.name}: ${fee.amount:.2f} ({fee.fee_type})")
-            pdf.ln(2)
-
-    # ---- SECTION 4: DEPARTMENTS ----
-    pdf.add_page()
-    section_header("4. Departments & Organization")
-    if config.departments:
-        body_text(f"{brand['name']} has {len(config.departments)} departments configured in the system:")
-        for dept in config.departments:
-            sub_header(dept.name)
-            if dept.description:
-                body_text(dept.description)
-            else:
-                body_text(f"Responsible for reviewing and processing applications assigned to {dept.name}.")
-            pdf.ln(1)
-    else:
-        body_text("Departments have not been configured yet.")
-
-    # ---- SECTION 5: USER ROLES ----
-    pdf.add_page()
-    section_header("5. User Roles & Permissions")
-    if config.user_roles:
-        body_text(f"The system defines {len(config.user_roles)} user roles with specific permissions:")
-        for role in config.user_roles:
-            sub_header(role.name)
-            if role.description:
-                body_text(role.description)
-            if role.permissions:
-                body_text(f"Permissions: {', '.join(role.permissions[:8])}")
-            pdf.ln(1)
-    else:
-        body_text("User roles have not been configured yet.")
-
-    # ---- SECTION 6: WORKFLOW PROCESSES ----
-    pdf.add_page()
-    section_header("6. Workflow & Approval Processes")
-    body_text(
-        "Each record type has a defined workflow that governs how applications move through "
-        "the review and approval process. Below is a summary of each workflow."
-    )
-    for rt in config.record_types[:8]:
-        if rt.workflow_steps:
-            sub_header(f"{rt.name} Workflow")
-            steps = sorted(rt.workflow_steps, key=lambda s: s.order)
-            for ws in steps[:8]:
-                role_info = f" ({ws.assigned_role})" if ws.assigned_role else ""
-                bullet(f"{ws.order}. {ws.name}{role_info}")
-            pdf.ln(2)
-
-    # ---- SECTION 7: DOCUMENT REQUIREMENTS ----
-    pdf.add_page()
-    section_header("7. Document Requirements")
-    body_text("Applicants must submit the following documents as part of their applications:")
-    for rt in config.record_types[:8]:
-        if rt.required_documents:
-            sub_header(rt.name)
-            for doc in rt.required_documents[:6]:
-                desc = f": {doc.description[:100]}" if doc.description else ""
-                bullet(f"{doc.name}{desc}")
-            pdf.ln(2)
-
-    # ---- SECTION 8: BEST PRACTICES ----
-    pdf.add_page()
-    section_header("8. Best Practices & Tips")
-    tips = [
-        "Always verify applicant information is complete before advancing the workflow",
-        "Use the internal notes feature to communicate with other reviewers",
-        "Set up email notification preferences to stay informed of new assignments",
-        "Check the dashboard regularly for pending items and approaching deadlines",
-        "Use the search function to quickly find applications by number, name, or address",
-        "Document all communications with applicants in the application's activity log",
-        "Follow the established fee schedule - do not manually adjust fees without authorization",
-        "Report any system issues immediately to the system administrator",
-        "Refer applicants to the online portal for 24/7 self-service options",
-        "Complete the Knowledge Quiz to verify your understanding of the new system",
-    ]
-    for tip in tips:
-        bullet(tip)
-        pdf.ln(1)
-
-    # ---- SECTION 9: SUPPORT ----
-    pdf.add_page()
-    section_header("9. Support & Resources")
-    body_text(
-        f"For technical support, contact the {brand['name']} Help Desk. "
-        "Additional resources include:"
-    )
-    bullet("Training Deck (PowerPoint) - Comprehensive staff training presentation")
-    bullet("FAQ Guide (PDF) - Answers to frequently asked questions")
-    bullet("Knowledge Quiz (PDF) - Self-assessment to verify understanding")
-    bullet(f"Community Website: {project.community_url or 'Contact your administrator'}")
-    pdf.ln(5)
-    body_text(
-        "For system-specific questions, contact your OpenGov implementation specialist. "
-        "For process-related questions, consult your department supervisor."
-    )
-    pdf.ln(10)
-    pdf.set_font("Arial", "I", 9)
-    pdf.set_text_color(150, 150, 150)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(usable_w, 5, _safe_text(f"This document was auto-generated for {brand['name']} by OpenGov Auto Implementation."), ln=True, align="C")
-
-    return "process_handbook.pdf", bytes(pdf.output())
-
 
 # ============================================================================
 # DATA SOURCES - Multi-source context ingestion
 # ============================================================================
 
-PEER_CITY_TEMPLATES = [
-    {
-        "id": "small-town-basic",
-        "name": "Small Town - Basic PLC",
-        "description": "Starter config for towns under 15,000 pop. Covers building permits, business licenses, and code complaints.",
-        "population": "< 15,000",
-        "tags": ["small", "basic", "residential"],
-        "record_types": [
-            {"name": "Residential Building Permit", "category": "Building", "form_fields": [
-                {"name": "Property Address", "field_type": "text", "required": True},
-                {"name": "Parcel Number", "field_type": "text", "required": True},
-                {"name": "Owner Name", "field_type": "text", "required": True},
-                {"name": "Contractor Name", "field_type": "text", "required": True},
-                {"name": "Contractor License #", "field_type": "text", "required": True},
-                {"name": "Project Description", "field_type": "textarea", "required": True},
-                {"name": "Estimated Value", "field_type": "number", "required": True},
-                {"name": "Square Footage", "field_type": "number", "required": False},
-            ], "fees": [
-                {"name": "Building Permit Fee", "amount": 150.00, "fee_type": "flat"},
-                {"name": "Plan Review Fee", "amount": 75.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Clerk"},
-                {"name": "Plan Review", "order": 2, "assigned_role": "Plan Reviewer"},
-                {"name": "Permit Issued", "order": 3, "assigned_role": "Building Official"},
-                {"name": "Inspection Scheduled", "order": 4, "assigned_role": "Inspector"},
-                {"name": "Final Inspection", "order": 5, "assigned_role": "Inspector"},
-            ], "required_documents": [
-                {"name": "Site Plan", "required": True, "stage": "submission"},
-                {"name": "Construction Plans", "required": True, "stage": "submission"},
-                {"name": "Contractor License", "required": True, "stage": "submission"},
-            ]},
-            {"name": "Business License", "category": "Licensing", "form_fields": [
-                {"name": "Business Name", "field_type": "text", "required": True},
-                {"name": "Business Address", "field_type": "text", "required": True},
-                {"name": "Owner Name", "field_type": "text", "required": True},
-                {"name": "Business Type", "field_type": "select", "required": True, "options": ["Retail", "Food Service", "Professional Services", "Home Occupation", "Other"]},
-                {"name": "EIN / Tax ID", "field_type": "text", "required": True},
-                {"name": "Number of Employees", "field_type": "number", "required": True},
-            ], "fees": [
-                {"name": "Annual License Fee", "amount": 100.00, "fee_type": "flat"},
-                {"name": "Late Renewal Penalty", "amount": 25.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Received", "order": 1, "assigned_role": "Clerk"},
-                {"name": "Zoning Review", "order": 2, "assigned_role": "Zoning Officer"},
-                {"name": "License Issued", "order": 3, "assigned_role": "Clerk"},
-            ], "required_documents": [
-                {"name": "State Registration", "required": True, "stage": "submission"},
-                {"name": "Certificate of Insurance", "required": True, "stage": "submission"},
-            ]},
-            {"name": "Code Enforcement Complaint", "category": "Code Enforcement", "form_fields": [
-                {"name": "Complaint Location", "field_type": "text", "required": True},
-                {"name": "Violation Type", "field_type": "select", "required": True, "options": ["Property Maintenance", "Zoning Violation", "Noise", "Overgrown Vegetation", "Abandoned Vehicle", "Other"]},
-                {"name": "Description", "field_type": "textarea", "required": True},
-                {"name": "Complainant Name", "field_type": "text", "required": False},
-                {"name": "Complainant Phone", "field_type": "text", "required": False},
-            ], "fees": [], "workflow_steps": [
-                {"name": "Complaint Filed", "order": 1, "assigned_role": "Clerk"},
-                {"name": "Investigation", "order": 2, "assigned_role": "Code Officer"},
-                {"name": "Notice Issued", "order": 3, "assigned_role": "Code Officer"},
-                {"name": "Re-Inspection", "order": 4, "assigned_role": "Code Officer"},
-                {"name": "Resolution", "order": 5, "assigned_role": "Code Officer"},
-            ], "required_documents": [
-                {"name": "Photos of Violation", "required": False, "stage": "submission"},
-            ]},
-        ],
-        "departments": [
-            {"name": "Building Department", "description": "Handles building permits, plan review, and inspections"},
-            {"name": "Clerk's Office", "description": "Manages business licenses, applications intake, and public records"},
-            {"name": "Code Enforcement", "description": "Investigates and resolves code violations and complaints"},
-        ],
-        "user_roles": [
-            {"name": "Administrator", "description": "Full system access", "permissions": ["manage_users", "manage_config", "view_reports", "approve_all"]},
-            {"name": "Clerk", "description": "Application intake and processing", "permissions": ["create_applications", "update_status", "collect_payments"]},
-            {"name": "Plan Reviewer", "description": "Reviews construction plans and documents", "permissions": ["review_plans", "add_comments", "approve_plans"]},
-            {"name": "Inspector", "description": "Conducts field inspections", "permissions": ["schedule_inspections", "record_results", "issue_violations"]},
-            {"name": "Code Officer", "description": "Code enforcement investigations", "permissions": ["investigate_complaints", "issue_notices", "close_cases"]},
-        ],
-    },
-    {
-        "id": "mid-city-full",
-        "name": "Mid-Size City - Full PLC Suite",
-        "description": "Comprehensive config for cities 15,000-100,000 pop. Full building, planning, licensing, and code enforcement.",
-        "population": "15,000 - 100,000",
-        "tags": ["medium", "comprehensive", "commercial", "residential"],
-        "record_types": [
-            {"name": "Residential Building Permit", "category": "Building", "form_fields": [
-                {"name": "Property Address", "field_type": "text", "required": True},
-                {"name": "Parcel/APN", "field_type": "text", "required": True},
-                {"name": "Owner Name", "field_type": "text", "required": True},
-                {"name": "Owner Phone", "field_type": "text", "required": True},
-                {"name": "Owner Email", "field_type": "email", "required": True},
-                {"name": "Contractor Name", "field_type": "text", "required": True},
-                {"name": "Contractor License #", "field_type": "text", "required": True},
-                {"name": "Project Type", "field_type": "select", "required": True, "options": ["New Construction", "Addition", "Remodel", "Repair", "Demolition", "Accessory Structure"]},
-                {"name": "Project Description", "field_type": "textarea", "required": True},
-                {"name": "Estimated Valuation", "field_type": "number", "required": True},
-                {"name": "Square Footage", "field_type": "number", "required": True},
-                {"name": "Number of Stories", "field_type": "number", "required": False},
-                {"name": "Flood Zone", "field_type": "select", "required": False, "options": ["Zone A", "Zone AE", "Zone X", "None"]},
-            ], "fees": [
-                {"name": "Building Permit Fee", "amount": 250.00, "fee_type": "flat"},
-                {"name": "Plan Review Fee", "amount": 125.00, "fee_type": "flat"},
-                {"name": "Technology Fee", "amount": 15.00, "fee_type": "flat"},
-                {"name": "Valuation Surcharge", "amount": 0.00, "fee_type": "calculated", "formula": "valuation * 0.015"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Permit Technician"},
-                {"name": "Completeness Check", "order": 2, "assigned_role": "Permit Technician"},
-                {"name": "Plan Review - Building", "order": 3, "assigned_role": "Plan Reviewer"},
-                {"name": "Plan Review - Fire", "order": 4, "assigned_role": "Fire Marshal"},
-                {"name": "Plan Review - Engineering", "order": 5, "assigned_role": "City Engineer"},
-                {"name": "Corrections Required", "order": 6, "assigned_role": "Plan Reviewer"},
-                {"name": "Approved for Issuance", "order": 7, "assigned_role": "Building Official"},
-                {"name": "Permit Issued", "order": 8, "assigned_role": "Permit Technician"},
-                {"name": "Inspections", "order": 9, "assigned_role": "Building Inspector"},
-                {"name": "Final / Certificate of Occupancy", "order": 10, "assigned_role": "Building Official"},
-            ], "required_documents": [
-                {"name": "Site Plan", "required": True, "stage": "submission"},
-                {"name": "Architectural Plans", "required": True, "stage": "submission"},
-                {"name": "Structural Calculations", "required": True, "stage": "submission"},
-                {"name": "Energy Compliance (Title 24)", "required": True, "stage": "submission"},
-                {"name": "Soils Report", "required": False, "stage": "submission"},
-                {"name": "Contractor License Copy", "required": True, "stage": "submission"},
-            ]},
-            {"name": "Commercial Building Permit", "category": "Building", "form_fields": [
-                {"name": "Property Address", "field_type": "text", "required": True},
-                {"name": "Parcel/APN", "field_type": "text", "required": True},
-                {"name": "Owner Name", "field_type": "text", "required": True},
-                {"name": "Applicant/Agent", "field_type": "text", "required": True},
-                {"name": "Architect of Record", "field_type": "text", "required": True},
-                {"name": "General Contractor", "field_type": "text", "required": True},
-                {"name": "Project Type", "field_type": "select", "required": True, "options": ["New Commercial", "Tenant Improvement", "Addition", "Renovation", "Change of Use"]},
-                {"name": "Occupancy Type", "field_type": "select", "required": True, "options": ["Assembly", "Business", "Educational", "Factory", "Hazardous", "Institutional", "Mercantile", "Residential", "Storage", "Utility"]},
-                {"name": "Project Description", "field_type": "textarea", "required": True},
-                {"name": "Estimated Valuation", "field_type": "number", "required": True},
-                {"name": "Building Area (sq ft)", "field_type": "number", "required": True},
-                {"name": "ADA Compliance", "field_type": "checkbox", "required": True},
-            ], "fees": [
-                {"name": "Commercial Permit Fee", "amount": 500.00, "fee_type": "flat"},
-                {"name": "Plan Review Fee", "amount": 250.00, "fee_type": "flat"},
-                {"name": "Fire Review Fee", "amount": 150.00, "fee_type": "flat"},
-                {"name": "Technology Fee", "amount": 25.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Permit Technician"},
-                {"name": "Completeness Review", "order": 2, "assigned_role": "Permit Technician"},
-                {"name": "Plan Review - Building", "order": 3, "assigned_role": "Plan Reviewer"},
-                {"name": "Plan Review - Fire/Life Safety", "order": 4, "assigned_role": "Fire Marshal"},
-                {"name": "Plan Review - Public Works", "order": 5, "assigned_role": "City Engineer"},
-                {"name": "Plan Review - Planning/Zoning", "order": 6, "assigned_role": "Planner"},
-                {"name": "Corrections Cycle", "order": 7, "assigned_role": "Plan Reviewer"},
-                {"name": "Final Approval", "order": 8, "assigned_role": "Building Official"},
-                {"name": "Permit Issued", "order": 9, "assigned_role": "Permit Technician"},
-                {"name": "Inspections", "order": 10, "assigned_role": "Building Inspector"},
-                {"name": "Certificate of Occupancy", "order": 11, "assigned_role": "Building Official"},
-            ], "required_documents": [
-                {"name": "Architectural Plans (stamped)", "required": True, "stage": "submission"},
-                {"name": "Structural Plans & Calcs", "required": True, "stage": "submission"},
-                {"name": "MEP Plans", "required": True, "stage": "submission"},
-                {"name": "Fire Sprinkler Plans", "required": True, "stage": "submission"},
-                {"name": "Energy Compliance", "required": True, "stage": "submission"},
-                {"name": "ADA Compliance Report", "required": True, "stage": "submission"},
-                {"name": "Geotechnical Report", "required": False, "stage": "submission"},
-            ]},
-            {"name": "Encroachment Permit", "category": "Public Works", "form_fields": [
-                {"name": "Location/Address", "field_type": "text", "required": True},
-                {"name": "Work Description", "field_type": "textarea", "required": True},
-                {"name": "Encroachment Type", "field_type": "select", "required": True, "options": ["Sidewalk Cut", "Street Cut", "Driveway Approach", "Utility Trench", "Other"]},
-                {"name": "Contractor Name", "field_type": "text", "required": True},
-                {"name": "Start Date", "field_type": "date", "required": True},
-                {"name": "End Date", "field_type": "date", "required": True},
-                {"name": "Traffic Control Required", "field_type": "checkbox", "required": True},
-            ], "fees": [
-                {"name": "Encroachment Permit Fee", "amount": 200.00, "fee_type": "flat"},
-                {"name": "Inspection Fee", "amount": 100.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Permit Technician"},
-                {"name": "Engineering Review", "order": 2, "assigned_role": "City Engineer"},
-                {"name": "Permit Issued", "order": 3, "assigned_role": "Permit Technician"},
-                {"name": "Pre-Construction Inspection", "order": 4, "assigned_role": "Inspector"},
-                {"name": "Final Inspection", "order": 5, "assigned_role": "Inspector"},
-            ], "required_documents": [
-                {"name": "Traffic Control Plan", "required": True, "stage": "submission"},
-                {"name": "Site Plan/Drawings", "required": True, "stage": "submission"},
-                {"name": "Insurance Certificate", "required": True, "stage": "submission"},
-            ]},
-            {"name": "Business License", "category": "Licensing", "form_fields": [
-                {"name": "Business Name (DBA)", "field_type": "text", "required": True},
-                {"name": "Legal Entity Name", "field_type": "text", "required": True},
-                {"name": "Business Address", "field_type": "text", "required": True},
-                {"name": "Mailing Address", "field_type": "text", "required": True},
-                {"name": "Owner/Manager Name", "field_type": "text", "required": True},
-                {"name": "Phone", "field_type": "text", "required": True},
-                {"name": "Email", "field_type": "email", "required": True},
-                {"name": "NAICS Code", "field_type": "text", "required": False},
-                {"name": "Business Type", "field_type": "select", "required": True, "options": ["Retail", "Restaurant/Food", "Professional Services", "Contractor", "Home Occupation", "Mobile/Vendor", "Manufacturing", "Other"]},
-                {"name": "Number of Employees", "field_type": "number", "required": True},
-                {"name": "Estimated Annual Revenue", "field_type": "number", "required": False},
-            ], "fees": [
-                {"name": "Business License Fee", "amount": 150.00, "fee_type": "flat"},
-                {"name": "Home Occupation Surcharge", "amount": 50.00, "fee_type": "conditional"},
-                {"name": "Late Penalty (per month)", "amount": 25.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Received", "order": 1, "assigned_role": "License Clerk"},
-                {"name": "Zoning Verification", "order": 2, "assigned_role": "Planner"},
-                {"name": "Fire Inspection Required", "order": 3, "assigned_role": "Fire Marshal"},
-                {"name": "Approved", "order": 4, "assigned_role": "License Clerk"},
-                {"name": "License Issued", "order": 5, "assigned_role": "License Clerk"},
-            ], "required_documents": [
-                {"name": "State Business Registration", "required": True, "stage": "submission"},
-                {"name": "Federal EIN", "required": True, "stage": "submission"},
-                {"name": "Certificate of Insurance", "required": True, "stage": "submission"},
-                {"name": "Lease Agreement", "required": False, "stage": "submission"},
-            ]},
-            {"name": "Special Event Permit", "category": "Licensing", "form_fields": [
-                {"name": "Event Name", "field_type": "text", "required": True},
-                {"name": "Event Location", "field_type": "text", "required": True},
-                {"name": "Event Date(s)", "field_type": "date", "required": True},
-                {"name": "Setup Time", "field_type": "text", "required": True},
-                {"name": "Event Hours", "field_type": "text", "required": True},
-                {"name": "Expected Attendance", "field_type": "number", "required": True},
-                {"name": "Alcohol Served", "field_type": "checkbox", "required": True},
-                {"name": "Road Closures Needed", "field_type": "checkbox", "required": True},
-                {"name": "Amplified Sound", "field_type": "checkbox", "required": True},
-                {"name": "Food Vendors", "field_type": "number", "required": False},
-            ], "fees": [
-                {"name": "Event Permit Fee", "amount": 200.00, "fee_type": "flat"},
-                {"name": "Road Closure Fee", "amount": 300.00, "fee_type": "conditional"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Clerk"},
-                {"name": "Police Review", "order": 2, "assigned_role": "Police Dept"},
-                {"name": "Fire Review", "order": 3, "assigned_role": "Fire Marshal"},
-                {"name": "Public Works Review", "order": 4, "assigned_role": "City Engineer"},
-                {"name": "Final Approval", "order": 5, "assigned_role": "City Manager"},
-                {"name": "Permit Issued", "order": 6, "assigned_role": "Clerk"},
-            ], "required_documents": [
-                {"name": "Event Site Map", "required": True, "stage": "submission"},
-                {"name": "Certificate of Insurance", "required": True, "stage": "submission"},
-                {"name": "ABC Permit (if alcohol)", "required": False, "stage": "submission"},
-            ]},
-            {"name": "Code Enforcement Case", "category": "Code Enforcement", "form_fields": [
-                {"name": "Violation Location", "field_type": "text", "required": True},
-                {"name": "Violation Category", "field_type": "select", "required": True, "options": ["Property Maintenance", "Zoning Violation", "Building w/o Permit", "Sign Violation", "Noise", "Overgrown Vegetation", "Abandoned Vehicle", "Illegal Dumping", "Other"]},
-                {"name": "Description", "field_type": "textarea", "required": True},
-                {"name": "Complainant Name", "field_type": "text", "required": False},
-                {"name": "Complainant Phone", "field_type": "text", "required": False},
-                {"name": "Anonymous Complaint", "field_type": "checkbox", "required": False},
-            ], "fees": [], "workflow_steps": [
-                {"name": "Complaint Received", "order": 1, "assigned_role": "Code Enforcement Clerk"},
-                {"name": "Case Assigned", "order": 2, "assigned_role": "Code Enforcement Supervisor"},
-                {"name": "Initial Investigation", "order": 3, "assigned_role": "Code Officer"},
-                {"name": "Notice of Violation", "order": 4, "assigned_role": "Code Officer"},
-                {"name": "Compliance Period", "order": 5, "assigned_role": "Code Officer"},
-                {"name": "Re-Inspection", "order": 6, "assigned_role": "Code Officer"},
-                {"name": "Citation / Abatement", "order": 7, "assigned_role": "Code Officer"},
-                {"name": "Case Closed", "order": 8, "assigned_role": "Code Enforcement Supervisor"},
-            ], "required_documents": [
-                {"name": "Violation Photos", "required": False, "stage": "investigation"},
-            ]},
-        ],
-        "departments": [
-            {"name": "Building & Safety", "description": "Building permits, plan review, inspections, and code compliance"},
-            {"name": "Planning & Zoning", "description": "Land use planning, zoning verification, and entitlements"},
-            {"name": "Public Works/Engineering", "description": "Encroachment permits, infrastructure, and capital projects"},
-            {"name": "Fire Prevention", "description": "Fire safety review, inspections, and special hazard permits"},
-            {"name": "Business License Division", "description": "Business licensing, renewals, and revenue collection"},
-            {"name": "Code Enforcement", "description": "Municipal code compliance, investigations, and abatement"},
-        ],
-        "user_roles": [
-            {"name": "System Administrator", "description": "Full system configuration and management", "permissions": ["manage_all"]},
-            {"name": "Department Director", "description": "Department oversight and final approvals", "permissions": ["approve_all", "view_reports", "manage_staff"]},
-            {"name": "Permit Technician", "description": "Intake, routing, and issuance of permits", "permissions": ["create_applications", "update_status", "collect_payments", "issue_permits"]},
-            {"name": "Plan Reviewer", "description": "Technical review of construction plans", "permissions": ["review_plans", "add_comments", "request_corrections", "approve_plans"]},
-            {"name": "Building Inspector", "description": "Field inspections for building permits", "permissions": ["schedule_inspections", "record_results", "approve_inspections"]},
-            {"name": "Fire Marshal / Fire Reviewer", "description": "Fire and life safety reviews and inspections", "permissions": ["review_fire", "approve_fire", "schedule_inspections"]},
-            {"name": "City Engineer", "description": "Engineering review for public works permits", "permissions": ["review_engineering", "approve_engineering"]},
-            {"name": "Planner / Zoning Officer", "description": "Zoning verification and planning review", "permissions": ["review_zoning", "verify_land_use"]},
-            {"name": "Code Enforcement Officer", "description": "Investigates complaints and enforces codes", "permissions": ["investigate_complaints", "issue_notices", "issue_citations"]},
-            {"name": "License Clerk", "description": "Business license processing and renewals", "permissions": ["process_licenses", "collect_payments", "issue_licenses"]},
-            {"name": "Public Portal User", "description": "External applicant self-service access", "permissions": ["submit_applications", "upload_documents", "make_payments", "view_status"]},
-        ],
-    },
-    {
-        "id": "county-planning",
-        "name": "County - Planning & Land Use",
-        "description": "County-level configuration focused on planning, land use, subdivisions, and environmental review.",
-        "population": "County-level",
-        "tags": ["county", "planning", "land_use", "environmental"],
-        "record_types": [
-            {"name": "Conditional Use Permit (CUP)", "category": "Planning", "form_fields": [
-                {"name": "Property Address/APN", "field_type": "text", "required": True},
-                {"name": "Property Owner", "field_type": "text", "required": True},
-                {"name": "Applicant Name", "field_type": "text", "required": True},
-                {"name": "Proposed Use", "field_type": "textarea", "required": True},
-                {"name": "Current Zoning", "field_type": "text", "required": True},
-                {"name": "Lot Size (acres)", "field_type": "number", "required": True},
-                {"name": "Adjacent Land Uses", "field_type": "textarea", "required": True},
-            ], "fees": [
-                {"name": "CUP Application Fee", "amount": 2500.00, "fee_type": "flat"},
-                {"name": "Environmental Review Fee", "amount": 1500.00, "fee_type": "flat"},
-                {"name": "Public Notice Fee", "amount": 300.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Submitted", "order": 1, "assigned_role": "Planning Technician"},
-                {"name": "Completeness Review", "order": 2, "assigned_role": "Planner"},
-                {"name": "Environmental Review (CEQA)", "order": 3, "assigned_role": "Environmental Planner"},
-                {"name": "Staff Report Prepared", "order": 4, "assigned_role": "Senior Planner"},
-                {"name": "Public Hearing Notice", "order": 5, "assigned_role": "Planning Technician"},
-                {"name": "Planning Commission Hearing", "order": 6, "assigned_role": "Planning Commission"},
-                {"name": "Decision / Conditions", "order": 7, "assigned_role": "Planning Director"},
-                {"name": "Appeal Period", "order": 8, "assigned_role": "Planning Technician"},
-            ], "required_documents": [
-                {"name": "Site Plan (to scale)", "required": True, "stage": "submission"},
-                {"name": "Project Description Narrative", "required": True, "stage": "submission"},
-                {"name": "Environmental Assessment", "required": True, "stage": "review"},
-                {"name": "Traffic Impact Study", "required": False, "stage": "review"},
-            ]},
-            {"name": "Subdivision / Tentative Map", "category": "Planning", "form_fields": [
-                {"name": "Property Address/APN", "field_type": "text", "required": True},
-                {"name": "Owner/Developer", "field_type": "text", "required": True},
-                {"name": "Engineer of Record", "field_type": "text", "required": True},
-                {"name": "Number of Lots", "field_type": "number", "required": True},
-                {"name": "Total Acreage", "field_type": "number", "required": True},
-                {"name": "Subdivision Type", "field_type": "select", "required": True, "options": ["Residential", "Commercial", "Mixed Use", "Industrial"]},
-                {"name": "Proposed Infrastructure", "field_type": "textarea", "required": True},
-            ], "fees": [
-                {"name": "Tentative Map Fee", "amount": 5000.00, "fee_type": "flat"},
-                {"name": "Per Lot Fee", "amount": 200.00, "fee_type": "per_unit"},
-                {"name": "Environmental Review", "amount": 3000.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application Filed", "order": 1, "assigned_role": "Planning Technician"},
-                {"name": "Completeness Review", "order": 2, "assigned_role": "Senior Planner"},
-                {"name": "Agency Circulation", "order": 3, "assigned_role": "Planner"},
-                {"name": "Environmental Review", "order": 4, "assigned_role": "Environmental Planner"},
-                {"name": "Conditions Development", "order": 5, "assigned_role": "Senior Planner"},
-                {"name": "Planning Commission", "order": 6, "assigned_role": "Planning Commission"},
-                {"name": "Board of Supervisors", "order": 7, "assigned_role": "Board"},
-                {"name": "Final Map Recordation", "order": 8, "assigned_role": "Planning Technician"},
-            ], "required_documents": [
-                {"name": "Tentative Map (engineered)", "required": True, "stage": "submission"},
-                {"name": "Preliminary Grading Plan", "required": True, "stage": "submission"},
-                {"name": "Utility Plan", "required": True, "stage": "submission"},
-                {"name": "Environmental Impact Report", "required": True, "stage": "review"},
-                {"name": "Traffic Study", "required": True, "stage": "review"},
-                {"name": "Water/Sewer Will-Serve Letters", "required": True, "stage": "review"},
-            ]},
-            {"name": "Grading Permit", "category": "Building", "form_fields": [
-                {"name": "Site Address", "field_type": "text", "required": True},
-                {"name": "Cut Volume (cubic yards)", "field_type": "number", "required": True},
-                {"name": "Fill Volume (cubic yards)", "field_type": "number", "required": True},
-                {"name": "Disturbed Area (sq ft)", "field_type": "number", "required": True},
-                {"name": "SWPPP Required", "field_type": "checkbox", "required": True},
-            ], "fees": [
-                {"name": "Grading Permit Fee", "amount": 750.00, "fee_type": "flat"},
-                {"name": "Erosion Control Fee", "amount": 250.00, "fee_type": "flat"},
-            ], "workflow_steps": [
-                {"name": "Application", "order": 1, "assigned_role": "Permit Technician"},
-                {"name": "Engineering Review", "order": 2, "assigned_role": "County Engineer"},
-                {"name": "Environmental Check", "order": 3, "assigned_role": "Environmental Planner"},
-                {"name": "Permit Issued", "order": 4, "assigned_role": "Permit Technician"},
-                {"name": "Inspections", "order": 5, "assigned_role": "Inspector"},
-            ], "required_documents": [
-                {"name": "Grading Plan (engineered)", "required": True, "stage": "submission"},
-                {"name": "Soils/Geotechnical Report", "required": True, "stage": "submission"},
-                {"name": "SWPPP", "required": True, "stage": "submission"},
-            ]},
-        ],
-        "departments": [
-            {"name": "Planning & Development", "description": "Land use planning, zoning, and entitlements"},
-            {"name": "Public Works / Engineering", "description": "Grading, infrastructure, and public improvement review"},
-            {"name": "Environmental Resources", "description": "CEQA review, environmental compliance, and sustainability"},
-            {"name": "Building & Safety", "description": "Structural review, building permits, and inspections"},
-        ],
-        "user_roles": [
-            {"name": "Planning Director", "description": "Oversees planning department, final authority", "permissions": ["manage_all", "approve_all"]},
-            {"name": "Senior Planner", "description": "Complex project review and staff reports", "permissions": ["review_plans", "write_reports", "present_hearings"]},
-            {"name": "Associate Planner", "description": "Project review and processing", "permissions": ["review_plans", "add_conditions"]},
-            {"name": "Planning Technician", "description": "Intake, routing, and records", "permissions": ["create_applications", "route_applications"]},
-            {"name": "Environmental Planner", "description": "CEQA and environmental review", "permissions": ["review_environmental", "approve_environmental"]},
-            {"name": "County Engineer", "description": "Engineering and infrastructure review", "permissions": ["review_engineering", "approve_engineering"]},
-        ],
-    },
-]
-
+PEER_CITY_TEMPLATES = json.loads(
+    (_pathlib.Path(__file__).parent / "templates" / "peer_city_templates.json").read_text()
+)
 
 def _extract_with_ai(prompt_text, project_context="", operation_type="extraction"):
     """Use Claude to extract structured data from text"""
@@ -4498,8 +3341,9 @@ def _extract_with_ai(prompt_text, project_context="", operation_type="extraction
     try:
         print(f"[AI] Running AI extraction: {operation_type} ({len(prompt_text)} chars)")
         response = claude_service.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
+            model=AI_MODEL,
+            max_tokens=AI_MAX_TOKENS,
+            timeout=AI_TIMEOUT,
             messages=[{"role": "user", "content": prompt_text}]
         )
 
@@ -4517,21 +3361,7 @@ def _extract_with_ai(prompt_text, project_context="", operation_type="extraction
         return None
 
 
-def _scrape_url_text(url):
-    """Scrape text content from a URL"""
-    import urllib.request
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-        import re
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text[:15000]
-    except Exception as e:
-        return f"Error fetching URL: {str(e)}"
+
 
 
 # --- 1. MUNICIPAL CODE / ORDINANCE PARSER ---
@@ -4562,7 +3392,7 @@ async def parse_municipal_code(project_id: str, data: dict):
     try:
         raw_text = text
         if url and not text:
-            raw_text = _scrape_url_text(url)
+            raw_text = None  # _scrape_url_text removed
             if raw_text.startswith("Error") or len(raw_text.strip()) < 100:
                 # Many municipal code sites (Municode, etc) use JS rendering
                 # or require downloads. Try alternate approaches.
@@ -4694,7 +3524,7 @@ async def ingest_existing_form(project_id: str, data: dict):
     form_url = data.get("url", "")
 
     if form_url and not form_text:
-        form_text = _scrape_url_text(form_url)
+        form_text = None  # _scrape_url_text removed
 
     if not form_text:
         raise HTTPException(status_code=400, detail="Form text or URL is required")
@@ -4784,7 +3614,7 @@ async def parse_fee_schedule(project_id: str, data: dict):
     fee_name = data.get("name", "Fee Schedule")
 
     if fee_url and not fee_text:
-        fee_text = _scrape_url_text(fee_url)
+        fee_text = None  # _scrape_url_text removed
 
     if not fee_text:
         raise HTTPException(status_code=400, detail="Fee schedule text or URL is required")
@@ -5008,8 +3838,9 @@ Respond as a JSON array of findings. Focus on the most impactful items first."""
     seen_titles = set()
     unique_items = []
     for item in items:
-        if item["title"] not in seen_titles:
-            seen_titles.add(item["title"])
+        item_title = item.get("title", "")
+        if item_title not in seen_titles:
+            seen_titles.add(item_title)
             unique_items.append(item)
 
     store.update_project(project_id, reconciliation_items=unique_items[:30])
@@ -5061,28 +3892,28 @@ async def apply_peer_template(project_id: str, data: dict):
 
     # Build configuration from template
     record_types = []
-    for rt_data in template["record_types"]:
+    for rt_data in template.get("record_types", []):
         rt = RecordType(
-            name=rt_data["name"],
+            name=rt_data.get("name", "Unknown"),
             category=rt_data.get("category", ""),
             description=rt_data.get("description", ""),
             form_fields=[FormField(
-                name=f["name"], field_type=f.get("field_type", "text"),
+                name=f.get("name", "field"), field_type=f.get("field_type", "text"),
                 required=f.get("required", True),
                 options=f.get("options"),
             ) for f in rt_data.get("form_fields", [])],
             fees=[Fee(
-                name=f["name"], amount=f.get("amount", 0),
+                name=f.get("name", "fee"), amount=f.get("amount", 0),
                 fee_type=f.get("fee_type", "flat"),
                 when_applied="submission", formula=f.get("formula", ""),
             ) for f in rt_data.get("fees", [])],
             workflow_steps=[WorkflowStep(
-                name=s["name"], order=s["order"],
+                name=s.get("name", "step"), order=s.get("order", 1),
                 assigned_role=s.get("assigned_role", ""),
-                status_to=s["name"].lower().replace(" ", "_"),
+                status_to=(s.get("name", "step")).lower().replace(" ", "_"),
             ) for s in rt_data.get("workflow_steps", [])],
             required_documents=[RequiredDocument(
-                name=d["name"], required=d.get("required", True),
+                name=d.get("name", "document"), required=d.get("required", True),
                 stage=d.get("stage", "submission"),
                 description=d.get("description", ""),
             ) for d in rt_data.get("required_documents", [])],
@@ -5090,11 +3921,11 @@ async def apply_peer_template(project_id: str, data: dict):
         record_types.append(rt)
 
     departments = [Department(
-        name=d["name"], description=d.get("description", "")
+        name=d.get("name", "Unknown"), description=d.get("description", "")
     ) for d in template.get("departments", [])]
 
     user_roles = [UserRole(
-        name=r["name"], description=r.get("description", ""),
+        name=r.get("name", "Unknown"), description=r.get("description", ""),
         permissions=r.get("permissions", []),
     ) for r in template.get("user_roles", [])]
 
@@ -5104,7 +3935,7 @@ async def apply_peer_template(project_id: str, data: dict):
             departments=departments,
             user_roles=user_roles,
             generated_at=datetime.utcnow(),
-            summary=f"Configuration from template: {template['name']}"
+            summary=f"Configuration from template: {template.get('name', 'Template')}"
         )
     else:
         existing = project.configuration if isinstance(project.configuration, Configuration) else Configuration(**project.configuration)
@@ -5534,111 +4365,6 @@ async def auto_fix_finding(project_id: str, finding_id: str):
 # CITY PREVIEW - Fetch metadata from community website
 # ============================================================================
 
-@app.post("/api/city-preview")
-async def get_city_preview(data: dict):
-    """Fetch metadata from a city/community website URL for personalization."""
-    import re
-    from urllib.request import urlopen, Request
-    from urllib.error import URLError
-
-    url = data.get("url", "").strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-
-    # Ensure URL has scheme
-    if not url.startswith("http"):
-        url = "https://" + url
-
-    result = {
-        "url": url,
-        "city_name": "",
-        "title": "",
-        "description": "",
-        "og_image": "",
-        "favicon": "",
-        "theme_color": "",
-    }
-
-    try:
-        req = Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; PLCAutoConfig/1.0)"
-        })
-        with urlopen(req, timeout=8) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")[:50000]  # limit
-
-        # Extract title
-        title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-        if title_match:
-            result["title"] = title_match.group(1).strip()[:200]
-
-        # Extract meta description
-        desc_match = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        if not desc_match:
-            desc_match = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+name=["\']description["\']', html, re.IGNORECASE)
-        if desc_match:
-            result["description"] = desc_match.group(1).strip()[:500]
-
-        # Extract og:image
-        og_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        if not og_match:
-            og_match = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+property=["\']og:image["\']', html, re.IGNORECASE)
-        if og_match:
-            img_url = og_match.group(1).strip()
-            if img_url.startswith("/"):
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                img_url = f"{parsed.scheme}://{parsed.netloc}{img_url}"
-            result["og_image"] = img_url
-
-        # Extract favicon
-        fav_match = re.search(r'<link[^>]+rel=["\'](?:shortcut )?icon["\'][^>]+href=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        if not fav_match:
-            fav_match = re.search(r'<link[^>]+href=["\']([^"\']*)["\'][^>]+rel=["\'](?:shortcut )?icon["\']', html, re.IGNORECASE)
-        if fav_match:
-            fav_url = fav_match.group(1).strip()
-            if fav_url.startswith("/"):
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                fav_url = f"{parsed.scheme}://{parsed.netloc}{fav_url}"
-            result["favicon"] = fav_url
-        else:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            result["favicon"] = f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
-
-        # Extract theme-color
-        theme_match = re.search(r'<meta[^>]+name=["\']theme-color["\'][^>]+content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-        if theme_match:
-            result["theme_color"] = theme_match.group(1).strip()
-
-        # Try to derive city name from title
-        title = result["title"]
-        city_name = title
-        # Common patterns: "City of X", "X, State", "Welcome to X"
-        for pattern in [
-            r"(?:City of |Town of |Village of )([A-Za-z\s]+)",
-            r"Welcome to (?:the )?(?:City of |Town of )?([A-Za-z\s]+)",
-            r"^([A-Za-z\s]+?)(?:\s*[-|,])",
-        ]:
-            m = re.search(pattern, title, re.IGNORECASE)
-            if m:
-                city_name = m.group(1).strip()
-                break
-        result["city_name"] = city_name[:100]
-
-    except (URLError, Exception) as e:
-        # If we can't fetch, try to derive city name from URL
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        domain = parsed.netloc.replace("www.", "")
-        domain_parts = domain.split(".")
-        if domain_parts:
-            city_guess = domain_parts[0].replace("-", " ").title()
-            result["city_name"] = city_guess
-        result["description"] = f"Could not fetch site details: {str(e)[:100]}"
-
-    return result
-
 
 # ============================================================================
 # AI CONSULTANT - Multi-agent Q&A for project questions
@@ -5787,8 +4513,9 @@ Instructions:
             api_messages.append({"role": "user", "content": question})
 
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=AI_MODEL,
                 max_tokens=1500,
+                timeout=AI_TIMEOUT,
                 system=system_prompt,
                 messages=api_messages,
             )

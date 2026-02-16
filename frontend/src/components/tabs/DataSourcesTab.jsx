@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Box, Typography, Paper, Button, TextField, Chip, Alert, LinearProgress,
-  Card, CardContent, CardActions, Accordion, AccordionSummary, AccordionDetails,
-  CircularProgress, Divider, Grid,
+  Box, Typography, Paper, Button, TextField, Chip, Alert,
+  Accordion, AccordionSummary, AccordionDetails,
+  CircularProgress, Grid,
 } from '@mui/material';
 import {
   ExpandMore, Warning, Error as ErrorIcon, Info, Refresh, AutoFixHigh,
   CheckCircle, TipsAndUpdates, Lightbulb, Storage, SchemaOutlined,
-  AttachMoney, Description, Psychology, Link as LinkIcon,
+  AttachMoney, Psychology,
 } from '@mui/icons-material';
 import { api } from '../../api/client';
 import AITeamSection from '../AITeamSection';

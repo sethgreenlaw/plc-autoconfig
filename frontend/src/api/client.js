@@ -43,6 +43,10 @@ export const api = {
   startAnalysis: (projectId) => request(`/projects/${projectId}/analyze`, { method: 'POST' }),
   getAnalysisStatus: (projectId) => request(`/projects/${projectId}/analysis-status`),
   getSampleCsv: (projectId) => request(`/projects/${projectId}/sample-csv`),
+  analyzeStep1: (projectId) => request(`/projects/${projectId}/analyze/parse-csv`, { method: 'POST' }),
+  analyzeStep2: (projectId, data) => request(`/projects/${projectId}/analyze/scrape-website`, { method: 'POST', body: data }),
+  analyzeStep3: (projectId, data) => request(`/projects/${projectId}/analyze/extract-data`, { method: 'POST', body: data }),
+  analyzeStep4: (projectId, data) => request(`/projects/${projectId}/analyze/generate-config`, { method: 'POST', body: data }),
 
   // Configuration
   getConfiguration: (projectId) => request(`/projects/${projectId}/configurations`),
@@ -58,11 +62,11 @@ export const api = {
     request(`/projects/${projectId}/configurations/roles/${roleId}`, { method: 'PUT', body: data }),
   deploy: (projectId) =>
     request(`/projects/${projectId}/configurations/deploy`, { method: 'POST' }),
+  exportConfig: (projectId) => request(`/projects/${projectId}/configurations/export`),
 
   // Community Research
   startResearch: (projectId) => request(`/projects/${projectId}/research`, { method: 'POST' }),
   getResearch: (projectId) => request(`/projects/${projectId}/research`),
-  getScrapeStatus: (projectId) => request(`/projects/${projectId}/scrape-status`),
 
   // City Preview
   getCityPreview: (url) => request('/city-preview', { method: 'POST', body: { url } }),
@@ -110,4 +114,7 @@ export const api = {
     request(`/projects/${projectId}/re-analyze`, { method: 'POST', body: { additional_context: additionalContext } }),
   deepScrape: (projectId, agentId) =>
     request(`/projects/${projectId}/deep-scrape`, { method: 'POST', body: { agent_id: agentId } }),
+
+  // Status
+  getKvStatus: () => request('/kv-status'),
 }
