@@ -583,48 +583,7 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
 
       {/* Activity Stream */}
       {showActivityStream && (
-        <ActivityStreamPanel
-          steps={activitySteps}
-          overallProgress={overallProgress}
-          onRetryStep={(stepId) => {
-            setAnalyzing(true);
-            const doRetry = async () => {
-              try {
-                if (stepId === 1) {
-                  updateStep(1, 'in_progress', { title: 'Parsing Uploaded Data', description: 'Retrying CSV parse...', details: {} });
-                  const result = await api.analyzeStep1(projectId);
-                  lastCsvData.current = result.csv_data;
-                  updateStep(1, 'completed', result.activity);
-                } else if (stepId === 2) {
-                  updateStep(2, 'in_progress', { title: 'Deep-Scanning Community Website', description: 'Retrying website scan...', details: {} });
-                  const result = await api.analyzeStep2(projectId, {});
-                  lastScrapeData.current = result.scrape_data || null;
-                  updateStep(2, result.status === 'step_2_skipped' ? 'skipped' : 'completed', result.activity);
-                } else if (stepId === 3) {
-                  updateStep(3, 'in_progress', { title: 'AI Extraction & Analysis', description: 'Retrying AI extraction...', details: {} });
-                  const result = await api.analyzeStep3(projectId, { scrape_data: lastScrapeData.current });
-                  lastResearchData.current = result.research_data || null;
-                  updateStep(3, result.status === 'step_3_skipped' ? 'skipped' : 'completed', result.activity);
-                } else if (stepId === 4) {
-                  updateStep(4, 'in_progress', { title: 'AI Configuration Synthesis', description: 'Retrying configuration generation...', details: {} });
-                  const result = await api.analyzeStep4(projectId, {
-                    csv_data: lastCsvData.current,
-                    research_data: lastResearchData.current,
-                    scrape_data: lastScrapeData.current,
-                  });
-                  updateStep(4, 'completed', result.activity);
-                  setAnalysisResult({ type: 'success', message: 'Configuration generated successfully!' });
-                  try { await onRefresh(); } catch {}
-                }
-              } catch (err) {
-                updateStep(stepId, 'failed', null, err.message || 'Retry failed');
-              } finally {
-                setAnalyzing(false);
-              }
-            };
-            doRetry();
-          }}
-        />
+        <ActivityStreamPanel steps={activitySteps} overallProgress={overallProgress} />
       )}
 
       {/* Analysis Result */}

@@ -35,7 +35,7 @@ import {
 } from '@mui/icons-material';
 import LinkIcon from '@mui/icons-material/Link';
 
-const ActivityStreamPanel = ({ steps, overallProgress, onRetryStep }) => {
+const ActivityStreamPanel = ({ steps, overallProgress }) => {
   const [expandedSteps, setExpandedSteps] = useState({});
   const [elapsedTimes, setElapsedTimes] = useState({});
 
@@ -510,22 +510,6 @@ const ActivityStreamPanel = ({ steps, overallProgress, onRetryStep }) => {
                       <Alert severity="error" sx={{ mt: 1, py: 0.5, px: 1 }}>
                         <Typography variant="caption">{step.error}</Typography>
                       </Alert>
-                    )}
-
-                    {(step.status === 'failed' || step.status === 'skipped') && onRetryStep && (
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="primary"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRetryStep(step.id);
-                        }}
-                        sx={{ mt: 1, textTransform: 'none', fontWeight: 600 }}
-                        startIcon={<Refresh />}
-                      >
-                        Retry this step
-                      </Button>
                     )}
 
                     {/* Expandable Details */}
