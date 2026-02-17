@@ -99,11 +99,39 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
     );
   };
 
+  // Read a File object as text
+  const readFileAsText = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+      reader.readAsText(file);
+    });
+  };
+
   const handleUpload = async () => {
     if (files.length === 0) return;
     setUploading(true);
+
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    const useTextUpload = totalSize > 3.5 * 1024 * 1024; // 3.5MB threshold
+
+    const doUpload = async () => {
+      if (useTextUpload) {
+        // Large files: read as text and send via JSON endpoint
+        const fileData = [];
+        for (const f of files) {
+          const content = await readFileAsText(f);
+          fileData.push({ filename: f.name, content });
+        }
+        return api.uploadFilesAsText(projectId, { files: fileData });
+      } else {
+        return api.uploadFiles(projectId, files);
+      }
+    };
+
     try {
-      await api.uploadFiles(projectId, files);
+      await doUpload();
       showSnackbar(`${files.length} file(s) uploaded successfully`, 'success');
       setFiles([]);
       await onRefresh();
@@ -114,7 +142,7 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
         const exists = await ensureProjectExists();
         if (exists) {
           try {
-            await api.uploadFiles(projectId, files);
+            await doUpload();
             showSnackbar(`${files.length} file(s) uploaded successfully`, 'success');
             setFiles([]);
             await onRefresh();
@@ -124,6 +152,21 @@ const UploadTab = ({ project, projectId, onRefresh, showSnackbar }) => {
           }
         } else {
           showSnackbar('Could not restore project. Please go back and re-create it.', 'error');
+        }
+      } else if (err.message?.includes('413') || err.message?.includes('payload') || err.message?.includes('too large')) {
+        // Multipart hit Vercel limit — retry as text
+        try {
+          const fileData = [];
+          for (const f of files) {
+            const content = await readFileAsText(f);
+            fileData.push({ filename: f.name, content });
+          }
+          await api.uploadFilesAsText(projectId, { files: fileData });
+          showSnackbar(`${files.length} file(s) uploaded successfully`, 'success');
+          setFiles([]);
+          await onRefresh();
+        } catch (retryErr) {
+          showSnackbar(retryErr.message, 'error');
         }
       } else {
         showSnackbar(err.message, 'error');

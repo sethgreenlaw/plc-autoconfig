@@ -2133,6 +2133,82 @@ async def upload_files(project_id: str, files: List[UploadFile] = File(...)):
     return {"files": uploaded, "project_status": "uploading"}
 
 
+@app.post("/api/projects/{project_id}/upload-text")
+async def upload_csv_text(project_id: str, request: Request):
+    """Upload CSV data as text (JSON body) to bypass Vercel's 4.5MB multipart limit.
+    Accepts: { files: [{ filename, content }] } where content is the CSV text.
+    The frontend reads large files client-side and sends text instead of binary."""
+    import time as _time
+
+    project = None
+    for attempt in range(3):
+        project = store.get_project(project_id)
+        if project:
+            break
+        _time.sleep(0.5)
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project not found. KV connected: {KV_AVAILABLE}.")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    file_list = body.get("files", [])
+    if not file_list:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    upload_dir = os.path.join(UPLOAD_DIR, project_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    uploaded = []
+    for file_data in file_list:
+        filename = file_data.get("filename", "unknown.csv")
+        csv_text = file_data.get("content", "")
+        if not csv_text:
+            continue
+
+        # Cap at 3MB of text per file to stay within Vercel limits
+        if len(csv_text) > 3 * 1024 * 1024:
+            csv_text = csv_text[:3 * 1024 * 1024]
+            # Trim to last complete line
+            last_newline = csv_text.rfind("\n")
+            if last_newline > 0:
+                csv_text = csv_text[:last_newline]
+
+        try:
+            file_path = os.path.join(upload_dir, filename)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(csv_text)
+        except (IOError, OSError) as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save file {filename}: {str(e)}")
+
+        try:
+            metadata = CSVParser.parse(csv_text)
+            file_info = UploadedFile(
+                filename=filename,
+                size=len(csv_text.encode("utf-8")),
+                rows_count=metadata.get("total_rows", 0),
+                columns=metadata.get("columns", []),
+            )
+            store.add_uploaded_file(project_id, file_info)
+            uploaded.append(file_info)
+
+            if KV_AVAILABLE:
+                try:
+                    _kv_set(f"file:{project_id}:{filename}", {
+                        "filename": filename,
+                        "content": csv_text[:500000],
+                        "metadata": metadata
+                    })
+                except Exception as e:
+                    print(f"[KV] Failed to store file content: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse {filename}: {str(e)}")
+
+    store.update_project(project_id, status="uploading")
+    return {"files": uploaded, "project_status": "uploading"}
+
 
 
 

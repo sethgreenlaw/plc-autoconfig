@@ -38,6 +38,8 @@ export const api = {
     files.forEach(f => fd.append('files', f))
     return request(`/projects/${projectId}/upload`, { method: 'POST', body: fd })
   },
+  uploadFilesAsText: (projectId, fileData) =>
+    request(`/projects/${projectId}/upload-text`, { method: 'POST', body: fileData }),
 
   // Analysis
   startAnalysis: (projectId) => request(`/projects/${projectId}/analyze`, { method: 'POST' }),
