@@ -424,30 +424,51 @@ STORE_PATH = os.path.join("/tmp", "plc_store.json")
 PROJECT_DIR = os.path.join("/tmp", "plc_projects")
 os.makedirs(PROJECT_DIR, exist_ok=True)
 
-# Try to use Vercel KV (Upstash Redis) for persistent storage
+# Try to use Redis for persistent storage
+# Priority: 1) Upstash REST API (KV_REST_API_URL), 2) Standard Redis (REDIS_URL)
 KV_AVAILABLE = False
 _redis_client = None
+_redis_mode = None  # "upstash" or "standard"
+
+# --- Attempt 1: Upstash REST API ---
 try:
-    from upstash_redis import Redis
+    from upstash_redis import Redis as UpstashRedis
     _kv_url = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL", "")
     _kv_token = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
     if _kv_url and _kv_token:
-        _redis_client = Redis(url=_kv_url, token=_kv_token)
+        _redis_client = UpstashRedis(url=_kv_url, token=_kv_token)
         KV_AVAILABLE = True
+        _redis_mode = "upstash"
         print(f"[KV] Upstash Redis connected: {_kv_url[:40]}...")
-    else:
-        print("[WARNING] WARNING: Upstash Redis NOT configured. Data will be lost on cold start!")
-        print("[WARNING] Set KV_REST_API_URL and KV_REST_API_TOKEN environment variables for persistent storage.")
 except ImportError:
-    print("[WARNING] WARNING: upstash-redis package not installed. Data will be lost on cold start!")
-    print("[WARNING] Set KV_REST_API_URL and KV_REST_API_TOKEN environment variables for persistent storage.")
+    pass
 except Exception as e:
-    print(f"[WARNING] WARNING: Failed to connect to Upstash Redis: {e}")
-    print("[WARNING] Data will be lost on cold start! Check your KV_REST_API_URL and KV_REST_API_TOKEN.")
+    print(f"[KV] Upstash connection failed: {e}")
+
+# --- Attempt 2: Standard Redis via REDIS_URL ---
+if not KV_AVAILABLE:
+    _redis_url = os.environ.get("REDIS_URL", "")
+    if _redis_url:
+        try:
+            import redis as _redis_pkg
+            _std_redis = _redis_pkg.from_url(_redis_url, decode_responses=True)
+            _std_redis.ping()
+            KV_AVAILABLE = True
+            _redis_mode = "standard"
+            _redis_client = _std_redis
+            print(f"[KV] Standard Redis connected: {_redis_url[:40]}...")
+        except ImportError:
+            print("[WARNING] redis package not installed. Run: pip install redis")
+        except Exception as e:
+            print(f"[KV] Standard Redis connection failed: {e}")
+
+if not KV_AVAILABLE:
+    print("[WARNING] No Redis configured. Data will be lost on cold start!")
+    print("[WARNING] Set REDIS_URL or KV_REST_API_URL + KV_REST_API_TOKEN for persistence.")
 
 
 def _kv_get(key):
-    """GET from Upstash Redis"""
+    """GET from Redis (supports both Upstash REST and standard Redis)"""
     if not KV_AVAILABLE or not _redis_client:
         return None
     try:
@@ -461,7 +482,7 @@ def _kv_get(key):
 
 
 def _kv_set(key, value):
-    """SET to Upstash Redis"""
+    """SET to Redis (supports both Upstash REST and standard Redis)"""
     if not KV_AVAILABLE or not _redis_client:
         return False
     try:
@@ -474,7 +495,7 @@ def _kv_set(key, value):
 
 
 def _kv_delete(key):
-    """DELETE from Upstash Redis"""
+    """DELETE from Redis (supports both Upstash REST and standard Redis)"""
     if not KV_AVAILABLE or not _redis_client:
         return False
     try:
@@ -486,7 +507,7 @@ def _kv_delete(key):
 
 
 def _kv_keys(pattern="project:*"):
-    """List keys from Upstash Redis"""
+    """List keys from Redis (supports both Upstash REST and standard Redis)"""
     if not KV_AVAILABLE or not _redis_client:
         return []
     try:
@@ -2928,6 +2949,7 @@ async def health_check():
         "KV_REST_API_TOKEN": bool(os.environ.get("KV_REST_API_TOKEN")),
         "UPSTASH_REDIS_REST_URL": bool(os.environ.get("UPSTASH_REDIS_REST_URL")),
         "UPSTASH_REDIS_REST_TOKEN": bool(os.environ.get("UPSTASH_REDIS_REST_TOKEN")),
+        "REDIS_URL": bool(os.environ.get("REDIS_URL")),
         "ANTHROPIC_API_KEY": bool(os.environ.get("ANTHROPIC_API_KEY")),
     }
 
@@ -2945,6 +2967,7 @@ async def health_check():
         "status": "healthy",
         "storage": {
             "kv": kv_status,
+            "kv_mode": _redis_mode or "none",
             "kv_working": kv_test,
             "kv_error": kv_error,
             "projects_in_memory": project_count,
