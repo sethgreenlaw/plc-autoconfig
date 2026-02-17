@@ -36,8 +36,8 @@ except ImportError:
 # 2. CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
 AI_MODEL = "claude-sonnet-4-20250514"
-AI_TIMEOUT = 50.0
-AI_MAX_TOKENS = 4000
+AI_TIMEOUT = 45.0
+AI_MAX_TOKENS = 3000
 SCRAPE_TIME_LIMIT = 45
 SCRAPE_MAX_PAGES_PER_PASS = 30
 # (set in CONFIGURATION section)
@@ -2795,7 +2795,7 @@ async def analyze_step4_generate_config(project_id: str, request: Request):
     if research:
         community_context = _format_research_for_analysis(research)
         if scraped_data and scraped_data.get("combined_text"):
-            community_context += f"\n\n### Raw Website Content Highlights:\n{scraped_data.get('combined_text', '')[:15000]}"
+            community_context += f"\n\n### Raw Website Content Highlights:\n{scraped_data.get('combined_text', '')[:8000]}"
 
     if scraped_data:
         scrape_stats = {
@@ -2810,17 +2810,22 @@ async def analyze_step4_generate_config(project_id: str, request: Request):
     matched_template = _match_peer_template(all_csv_data, project.customer_name)
     template_context = _build_intelligence_context(all_csv_data, community_context, matched_template)
 
+    # Cap all inputs to fit within Vercel's 60-second timeout
+    capped_csv = all_csv_data[:20000] if len(all_csv_data) > 20000 else all_csv_data
+    capped_community = community_context[:15000] if len(community_context) > 15000 else community_context
+    capped_template = template_context[:8000] if len(template_context) > 8000 else template_context
+
     # Build combined prompt
     web_source_note = f"(Extracted from real website scrape of {scrape_stats.get('pages_scraped', 0)} pages)" if scrape_stats else ""
 
     combined_data = _sanitize_to_ascii(f"""## SOURCE 1: Uploaded CSV Data (Primary Source)
-{all_csv_data}
+{capped_csv}
 
 ## SOURCE 2: Community Website Research {web_source_note}
-{community_context if community_context else "No community URL provided - using best practices for configuration."}
+{capped_community if capped_community else "No community URL provided - using best practices for configuration."}
 
 ## SOURCE 3: Peer City Reference Data
-{template_context}
+{capped_template}
 
 ## SOURCE 4: Industry Best Practices
 Use your knowledge of PLC implementations across hundreds of municipalities to fill in gaps and ensure completeness.
